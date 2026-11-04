@@ -1,0 +1,56 @@
+{
+  "name": "netnote",
+  "version": "0.10.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --open",
+    "start": "vite --open",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.{ts,mjs}\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.{ts,mjs}\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "node test/e2e/run.mjs",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test"
+  },
+  "dependencies": {
+    "@iwsdk/core": "1.0.1",
+    "@pmndrs/uikit": "^1.0.74",
+    "@pmndrs/uikit-horizon": "^1.0.74",
+    "@pmndrs/uikit-lucide": "^1.0.74",
+    "d3-force-3d": "^3.0.6",
+    "fflate": "^0.8.3",
+    "three": "npm:super-three@0.181.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@iwsdk/cli": "1.0.1",
+    "@iwsdk/reference": "1.0.1",
+    "@iwsdk/vite-plugin-dev": "1.0.1",
+    "@meta-quest/metavr": "^1.8.1",
+    "@types/three": "^0.181.0",
+    "@vitest/coverage-v8": "^3.2.7",
+    "eslint": "^9.39.5",
+    "fake-indexeddb": "^6.2.7",
+    "happy-dom": "^15.11.7",
+    "prettier": "^3.9.10",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.72.1",
+    "vite": "^7.1.4",
+    "vitest": "^3.2.7"
+  },
+  "overrides": {
+    "sharp": "0.35.4",
+    "three": "npm:super-three@0.181.0"
+  },
+  "engines": {
+    "node": ">=20.19.0 <21.0.0-0 || >=22.12.0 <23.0.0-0 || >=24.0.0"
+  },
+  "description": "NetNote: a VR-native notes app for Meta Quest and Meta VR glasses, built on the Immersive Web SDK.",
+  "license": "MIT"
+}

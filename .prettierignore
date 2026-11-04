@@ -1,0 +1,6 @@
+dist
+node_modules
+.iwsdk
+coverage
+sample-vault
+package-lock.json
