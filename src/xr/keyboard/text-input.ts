@@ -141,6 +141,14 @@ export class TextInput {
     this.emit();
   }
 
+  /** Replace the whole text (e.g. another block was chosen) without closing the keyboard. */
+  setText(text: string): void {
+    this.field.value = '';
+    this.state.committed = text;
+    this.state.live = '';
+    this.emit();
+  }
+
   clear(): void {
     this.field.value = '';
     this.state.committed = '';

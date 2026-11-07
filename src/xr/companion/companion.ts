@@ -1,11 +1,13 @@
 /**
  * Mochi, the companion's body: a soft round creature (an original design made of simple shapes) that
- * floats low in your left periphery, about 30° left and 35° down: one glance finds it, and it is never
- * in front of what you read. Its remarks appear in a small bubble beside it; one pinch on the bubble's
- * button follows its suggestion, a pinch on Mochi itself pokes it.
+ * sits just outside the lower-left corner of the card you are reading, a little in front of it, so it
+ * is in view whenever you read and never hidden behind the card or covering its text. With no card
+ * open it waits at the left end of the menu. A small gold badge shows how many possible links it has
+ * found; its bubble says what and why, with buttons to act on it. A pinch on Mochi pokes it.
  *
- * Human factors: it follows your body lazily (never head-locked), its idle motion is a slow 5 mm bob,
- * and it fades away while you write, search or read the insights panel.
+ * Human factors: it moves with the card (never head-locked), its idle motion is a slow 5 mm bob, the
+ * bubble is drawn on top so nothing hides it, and it steps aside while you write, search or read the
+ * insights panel.
  */
 import {
   CanvasTexture,
@@ -26,7 +28,8 @@ import {
 import { COLORS } from '../theme';
 import { drawButton, font, roundRect, wrap, type Ctx } from '../ui/draw';
 import { Surface } from '../ui/surface';
-import type { Act, Mood, Speech } from './brain';
+import { t } from '../../app/i18n';
+import type { Act, Mood, Speech, SpeechButton } from './brain';
 import { damp, follow } from '../motion/ease';
 
 const BODY = '#ffd6e0';
@@ -46,21 +49,27 @@ function toonRamp(): DataTexture {
   return tex;
 }
 
-const BW = 900;
-const BH = 300;
+const BW = 960;
+const BH = 440;
 
-/** The speech bubble. */
+const label = (b: SpeechButton): string => {
+  const tr = t();
+  return { show: tr.petBtnShow, connect: tr.petBtnConnect, dismiss: tr.petBtnDismiss, next: tr.petShow, insights: tr.petInsights }[b];
+};
+
+/** The speech bubble: what it noticed, why, and up to three buttons. Drawn on top of everything. */
 export class Bubble extends Surface {
   speech: Speech | null = null;
 
   constructor() {
-    super(0.34, BW, BH);
+    super(0.36, BW, BH);
     this.mesh.name = 'companion-bubble';
-    this.mesh.renderOrder = 14;
+    this.mesh.renderOrder = 40;
+    this.mesh.material.depthTest = false;
   }
 
   set(s: Speech | null): void {
-    if (s?.text === this.speech?.text && s?.label === this.speech?.label) return;
+    if (s === this.speech) return;
     this.speech = s;
     this.mesh.visible = !!s;
     this.invalidate();
@@ -70,29 +79,57 @@ export class Bubble extends Surface {
     ctx.clearRect(0, 0, BW, BH);
     const s = this.speech;
     if (!s) return;
-    const hasAction = !!(s.action && s.label);
-    ctx.font = font(44, 600);
-    const lines = wrap(ctx, s.text, BW - 120, hasAction ? 2 : 3);
-    const h = 60 + lines.length * 58 + (hasAction ? 92 : 0);
-    const y0 = BH - h - 10;
-    roundRect(ctx, 10, y0, BW - 20, h, 44);
-    ctx.fillStyle = 'rgba(14,20,38,0.94)';
+    const n = s.buttons.length;
+    ctx.font = font(44, 650);
+    const lines = wrap(ctx, s.text, BW - 110, 2);
+    ctx.font = font(32, 400);
+    const subs = s.sub ? wrap(ctx, s.sub, BW - 110, 2) : [];
+    const h = 50 + lines.length * 56 + subs.length * 42 + (subs.length ? 10 : 0) + (n ? 100 : 0);
+    const y0 = BH - h - 6;
+    roundRect(ctx, 6, y0, BW - 12, h, 40);
+    ctx.fillStyle = 'rgba(14,20,38,0.96)';
     ctx.fill();
     ctx.lineWidth = 3;
-    ctx.strokeStyle = 'rgba(255,214,224,0.55)';
+    ctx.strokeStyle = 'rgba(255,214,224,0.6)';
     ctx.stroke();
-    ctx.fillStyle = COLORS.text;
     ctx.textBaseline = 'middle';
-    lines.forEach((l, i) => ctx.fillText(l, 60, y0 + 56 + i * 58));
-    if (hasAction) {
-      ctx.font = font(34, 700);
-      const w = ctx.measureText(s.label!).width + 70;
-      const r = { x: 50, y: y0 + h - 96, w, h: 72 };
-      drawButton(ctx, r, s.label!, 'gold', this.isHover('act'), 34);
-      this.hit({ id: 'act', ...r });
+    ctx.font = font(44, 650);
+    ctx.fillStyle = COLORS.text;
+    lines.forEach((l, i) => ctx.fillText(l, 50, y0 + 50 + i * 56));
+    ctx.font = font(32, 400);
+    ctx.fillStyle = COLORS.textDim;
+    const subY = y0 + 50 + lines.length * 56 - 6;
+    subs.forEach((l, i) => ctx.fillText(l, 50, subY + i * 42));
+    let x = 44;
+    const by = y0 + h - 96;
+    for (const b of s.buttons) {
+      ctx.font = font(32, 700);
+      const w = Math.max(170, ctx.measureText(label(b)).width + 60);
+      const r = { x, y: by, w, h: 76 };
+      drawButton(ctx, r, label(b), b === 'dismiss' ? 'ghost' : b === 'connect' ? 'primary' : 'gold', this.isHover(b), 32);
+      this.hit({ id: b, ...r });
+      x += w + 16;
     }
     ctx.textBaseline = 'alphabetic';
   }
+}
+
+function badgeTexture(n: number): CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 96;
+  const g = c.getContext('2d')!;
+  g.beginPath();
+  g.arc(48, 48, 40, 0, Math.PI * 2);
+  g.fillStyle = COLORS.gold;
+  g.fill();
+  g.fillStyle = '#1a1206';
+  g.font = font(n > 9 ? 40 : 50, 800);
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(n > 99 ? '99' : String(n), 48, 52);
+  const tex = new CanvasTexture(c);
+  tex.colorSpace = SRGBColorSpace;
+  return tex;
 }
 
 interface Anim {
@@ -112,6 +149,8 @@ export class Companion {
   private readonly eyes: Mesh[] = [];
   private readonly arms: Mesh[] = [];
   private readonly hearts: Sprite;
+  private readonly badge: Sprite;
+  private badgeN = -1;
   private anims: Anim[] = [];
   private time = 0;
   private blinkAt = 2;
@@ -155,8 +194,30 @@ export class Companion {
     this.hearts.scale.setScalar(0.35);
     this.hearts.raycast = () => undefined;
     this.body.add(this.hearts);
+    this.badge = new Sprite(new SpriteMaterial({ map: badgeTexture(0), transparent: true, depthTest: false }));
+    this.badge.scale.setScalar(0.32);
+    this.badge.position.set(0.42, 0.9, 0.1);
+    this.badge.renderOrder = 41;
+    this.badge.raycast = () => undefined;
+    this.badge.visible = false;
+    this.group.add(this.badge);
+    this.group.traverse((o) => {
+      if (o !== this.badge) o.renderOrder = 30;
+    });
     this.group.add(this.body);
     this.bubble.mesh.visible = false;
+  }
+
+  /** How many possible links are waiting (0 hides the badge). */
+  setBadge(n: number): void {
+    if (n === this.badgeN) return;
+    this.badgeN = n;
+    this.badge.visible = n > 0;
+    if (n > 0) {
+      this.badge.material.map?.dispose();
+      this.badge.material.map = badgeTexture(n);
+      this.badge.material.needsUpdate = true;
+    }
   }
 
   play(a: Act): void {
@@ -241,15 +302,16 @@ export class Companion {
     this.hearts.material.opacity = heartsA;
     this.hearts.visible = heartsA > 0.01;
 
-    // bubble: beside it, towards the centre of your view, facing you
+    // bubble: just above it, reaching left (away from the card's text), facing you
     this.bubble.set(this.fade > 0.5 ? speech : null);
     if (this.bubble.mesh.visible) {
       const toEye = eye.clone().sub(this.group.position).setY(0).normalize();
       const right = new Vector3().crossVectors(new Vector3(0, 1, 0), toEye).normalize();
       const p = this.group.position
         .clone()
-        .addScaledVector(right, -(this.bubble.widthM / 2 + size * 0.15))
-        .setY(this.group.position.y + size * 0.55 + this.bubble.heightM / 2);
+        .addScaledVector(right, -(this.bubble.widthM / 2 - size * 0.6))
+        .addScaledVector(toEye, 0.01)
+        .setY(this.group.position.y + size * 1.05 + this.bubble.heightM / 2);
       this.bubble.mesh.position.copy(p);
       this.bubble.mesh.lookAt(eye);
       this.bubble.update();

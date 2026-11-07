@@ -1,7 +1,11 @@
 /**
- * The map in your hand (World-in-Miniature, Stoakley et al. 1995): a 15 cm copy of the graph above
- * your left hand, oriented like the big one, coloured by topic, with your current note and "you are
- * here" marked. Point at a spot on it and pinch: the big graph glides so that note is in front of you.
+ * The map in your hand (World-in-Miniature, Stoakley et al. 1995): a 15 cm holographic copy of the
+ * graph projected above your left hand, oriented like the big one, coloured by topic, with your
+ * current note and "you are here" marked.
+ *   - point at a star on it and pinch: the big graph turns that note round to face you;
+ *   - grab the glowing bezel ring and drag: the map turns freely like a ball in your hand, and the
+ *     big graph turns with it (a tick on the bezel every 15° you turn, felt and heard).
+ * The projector base under it stays level and keeps north, so you never lose your bearings.
  */
 import {
   BufferAttribute,
@@ -20,10 +24,16 @@ import {
   PointsMaterial,
   SphereGeometry,
   SRGBColorSpace,
+  TorusGeometry,
   Vector3,
-  type Quaternion,
+  Quaternion,
+  LineSegments,
+  CylinderGeometry,
+  AdditiveBlending,
+  DoubleSide,
 } from '@iwsdk/core';
 import type { XRPointerEvent } from '../ui/surface';
+import { dragRotation, grabPoint } from '../interaction/turn';
 
 /** metres: the graph's radius in your hand */
 export const MINI_R = 0.075;
@@ -66,6 +76,18 @@ export class MiniMap {
   hovered: string | null = null;
   onPick: ((id: string) => void) | null = null;
   onHover: ((id: string | null) => void) | null = null;
+  /** the map was turned by `q` (world space): turn the big graph the same way */
+  onRotate: ((q: Quaternion) => void) | null = null;
+  /** turning started / ended (for sound and haptics) */
+  onTurnTick: (() => void) | null = null;
+  private readonly bezel: Mesh<TorusGeometry, MeshBasicMaterial>;
+  private readonly bezelHit: Mesh<TorusGeometry, MeshBasicMaterial>;
+  private readonly ticks: LineSegments<BufferGeometry, LineBasicMaterial>;
+  private readonly base = new Group();
+  private readonly baseMats: (LineBasicMaterial | MeshBasicMaterial)[] = [];
+  private drag: { pointerId: number; last: Vector3; turned: number } | null = null;
+  /** world pose of the map last frame (for the grab maths) */
+  private readonly worldCentre = new Vector3();
 
   constructor() {
     this.group.name = 'minimap';
@@ -98,17 +120,121 @@ export class MiniMap {
     this.you.renderOrder = 13;
     this.you.raycast = () => undefined;
     this.group.add(this.you);
+
+    // the bezel: a glowing ring around the ball's equator, with 15° ticks; grab it to turn the map
+    this.bezel = new Mesh(
+      new TorusGeometry(MINI_R * 1.2, 0.0016, 8, 96),
+      new MeshBasicMaterial({ color: 0x5ee7ff, transparent: true, opacity: 0, depthWrite: false, blending: AdditiveBlending }),
+    );
+    this.bezel.rotation.x = Math.PI / 2;
+    this.bezel.renderOrder = 12;
+    this.bezel.raycast = () => undefined;
+    this.group.add(this.bezel);
+    this.bezelHit = new Mesh(new TorusGeometry(MINI_R * 1.2, 0.011, 6, 48), new MeshBasicMaterial({ visible: false }));
+    this.bezelHit.rotation.x = Math.PI / 2;
+    this.bezelHit.name = 'minimap-bezel';
+    this.group.add(this.bezelHit);
+    const tk: number[] = [];
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      const r0 = MINI_R * 1.2;
+      const r1 = r0 + (i % 6 === 0 ? 0.009 : 0.004);
+      tk.push(Math.cos(a) * r0, 0, Math.sin(a) * r0, Math.cos(a) * r1, 0, Math.sin(a) * r1);
+    }
+    const tg = new BufferGeometry();
+    tg.setAttribute('position', new BufferAttribute(new Float32Array(tk), 3));
+    this.ticks = new LineSegments(tg, new LineBasicMaterial({ color: 0x9fe9ff, transparent: true, opacity: 0, depthWrite: false }));
+    this.ticks.renderOrder = 12;
+    this.ticks.raycast = () => undefined;
+    this.group.add(this.ticks);
+
+    // the projector base: level, north up, with a faint light cone up to the ball
+    const disc: number[] = [];
+    for (let k = 0; k < 2; k++) {
+      const r = MINI_R * (k ? 0.55 : 0.7);
+      for (let i = 0; i < 64; i++) {
+        const a0 = (i / 64) * Math.PI * 2;
+        const a1 = ((i + 1) / 64) * Math.PI * 2;
+        disc.push(Math.cos(a0) * r, 0, Math.sin(a0) * r, Math.cos(a1) * r, 0, Math.sin(a1) * r);
+      }
+    }
+    disc.push(0, 0, -MINI_R * 0.7, 0, 0, -MINI_R * 0.88); // north
+    const dg = new BufferGeometry();
+    dg.setAttribute('position', new BufferAttribute(new Float32Array(disc), 3));
+    const dm = new LineBasicMaterial({ color: 0x5ee7ff, transparent: true, opacity: 0, depthWrite: false });
+    const baseLines = new LineSegments(dg, dm);
+    baseLines.raycast = () => undefined;
+    const beamH = MINI_R * 1.05;
+    const beam = new Mesh(
+      new CylinderGeometry(MINI_R * 0.95, MINI_R * 0.55, beamH, 32, 1, true).translate(0, beamH / 2, 0),
+      new MeshBasicMaterial({ color: 0x5ee7ff, transparent: true, opacity: 0, depthWrite: false, side: DoubleSide, blending: AdditiveBlending }),
+    );
+    beam.raycast = () => undefined;
+    beam.renderOrder = 10;
+    this.base.add(baseLines, beam);
+    this.baseMats.push(dm, beam.material);
+    this.base.visible = false;
     this.bind();
+  }
+
+  /** The level base lives outside the rotating ball: add it to the scene next to `group`. */
+  get baseGroup(): Group {
+    return this.base;
+  }
+
+  get turning(): boolean {
+    return !!this.drag;
   }
 
   private bind(): void {
     const g = this.group as unknown as { addEventListener(t: string, f: (e: XRPointerEvent) => void): void };
     const idOf = (e: XRPointerEvent): string | null => (e.object === this.pick && e.instanceId !== undefined ? (this.ids[e.instanceId] ?? null) : null);
-    g.addEventListener('pointermove', (e) => this.setHover(idOf(e)));
+    const ray = (e: XRPointerEvent): { o: Vector3; d: Vector3 } => {
+      const q = e.pointerQuaternion;
+      return {
+        o: new Vector3(e.pointerPosition.x, e.pointerPosition.y, e.pointerPosition.z),
+        d: new Vector3(0, 0, -1).applyQuaternion(new Quaternion(q.x, q.y, q.z, q.w)),
+      };
+    };
+    const held = (e: XRPointerEvent): Vector3 => {
+      const { o, d } = ray(e);
+      return grabPoint(o, d, this.worldCentre, MINI_R * 1.2 * this.group.scale.x).sub(this.worldCentre);
+    };
+    g.addEventListener('pointermove', (e) => {
+      const dr = this.drag;
+      if (dr && dr.pointerId === e.pointerId) {
+        const now = held(e);
+        const q = dragRotation(dr.last, now);
+        const angle = 2 * Math.acos(Math.min(1, Math.abs(q.w)));
+        if (angle > 1e-4) {
+          this.onRotate?.(q);
+          dr.turned += angle;
+          if (dr.turned > Math.PI / 12) {
+            dr.turned = 0;
+            this.onTurnTick?.();
+          }
+        }
+        dr.last = now;
+        return;
+      }
+      this.setHover(idOf(e));
+    });
     g.addEventListener('pointerleave', () => this.setHover(null));
-    g.addEventListener('pointerdown', (e) => e.stopPropagation());
+    g.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      if (e.object === this.bezelHit && this.opacity > 0.6) {
+        this.drag = { pointerId: e.pointerId, last: held(e), turned: 0 };
+        (this.group as unknown as { setPointerCapture(id: number): void }).setPointerCapture(e.pointerId);
+        this.onTurnTick?.();
+      }
+    });
     g.addEventListener('pointerup', (e) => {
       e.stopPropagation();
+      if (this.drag?.pointerId === e.pointerId) {
+        (this.group as unknown as { releasePointerCapture(id: number): void }).releasePointerCapture(e.pointerId);
+        this.drag = null;
+        return;
+      }
       const id = idOf(e);
       if (id && this.opacity > 0.6) this.onPick?.(id);
     });
@@ -158,15 +284,26 @@ export class MiniMap {
   place(dt: number, anchor: Vector3, quat: Quaternion, focusId: string | null, headLocal: Vector3, headFwd: Vector3): void {
     this.opacity += (this.target - this.opacity) * Math.min(1, dt * 6);
     this.group.visible = this.opacity > 0.02;
+    this.base.visible = this.group.visible;
     if (!this.group.visible) {
       this.setHover(null);
+      this.drag = null;
       return;
     }
-    this.group.position.copy(anchor);
+    // while you turn it, the ball stays where you grabbed it (it does not chase your other hand)
+    if (!this.drag) this.group.position.copy(anchor);
     this.group.quaternion.copy(quat);
     this.group.updateMatrixWorld(true);
+    this.worldCentre.copy(this.group.position);
+    this.base.position.copy(this.group.position).setY(this.group.position.y - MINI_R * 1.35);
+    this.base.quaternion.identity();
+    const glow = this.drag ? 1 : this.hovered ? 0.8 : 0.6;
     this.mat.opacity = this.opacity;
     this.shell.material.opacity = 0.35 * this.opacity;
+    this.bezel.material.opacity = glow * this.opacity;
+    this.ticks.material.opacity = 0.7 * glow * this.opacity;
+    this.baseMats[0]!.opacity = 0.45 * this.opacity;
+    this.baseMats[1]!.opacity = 0.05 * this.opacity;
     const mark = (m: Mesh<SphereGeometry, MeshBasicMaterial>, id: string | null): void => {
       const i = id ? this.ids.indexOf(id) : -1;
       m.visible = i >= 0;

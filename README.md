@@ -18,16 +18,16 @@ Built with Meta's [Immersive Web SDK](https://github.com/facebook/immersive-web-
 | | |
 |---|---|
 | **See** | The graph floats in front of you, coloured by topic. Topic *territories* glow around their notes with a name label; bridge notes get a gold ring. |
-| **Read** | Pinch a star: its card opens on the reading shelf to your right, with clickable links, backlinks and "possibly related" notes. Pin cards to keep several open. |
+| **Read** | Pinch a star: the whole graph turns about its centre to bring it round to you, and its card opens on the reading shelf to your right, with clickable links, backlinks and "possibly related" notes. Pin cards to keep several open. |
 | **Move the room** | Pinch empty space and move your hand. Pinch with both hands: pull apart to zoom, turn to rotate. |
 | **Connect** | Pinch a star and drag it onto another. A writing card asks *why are these connected?* The answer is written into the note (`## Connections`). |
-| **Write** | New idea, write into a note, rename, delete. Text comes from the Meta Quest system keyboard, voice dictation or a Bluetooth keyboard. |
+| **Write** | New idea, rename, delete, and *Edit*: the note opens block by block (paragraphs, headings, lists); pick a block, change it, add one below or remove it, then save. Text comes from the Meta Quest system keyboard, voice dictation or a Bluetooth keyboard. |
 | **Think on the wall** | Put cards on the *thinking wall* on your left. Cards placed side by side form a group; the group tells you what they share, which note seems to be missing (pinch it to bring it in) and asks a question. *Write an answer* creates a note linked to the whole group. The wall is saved. |
 | **Ask** | *Insights*: hidden links, questions between topics, topics and bridges, unwritten notes, drifting notes. Each row lights up on the graph and offers one action. |
-| **Navigate** | *Map in hand*: a 15 cm copy of the graph above your left hand; point at a note and pinch, and the big graph glides it in front of you. *Find* searches notes and `#tags`. |
+| **Navigate** | *Map in hand*: a 15 cm holographic copy of the graph projected above your left hand. Grab its glowing bezel ring and drag to turn it freely; the big graph turns with it. Point at a note and pinch: the big graph turns it round to face you. *Find* searches notes and `#tags`. |
 | **Explore** | *Path to…* on a card, then pinch another note: the shortest chain of links lights up and flows gold. *More → Tour* walks along your links on its own; *More → Time* replays how your notes were born, one by one. |
 | **Feel it** | Data flows along the links of the note you read (cyan out, violet in), a thread ties each card to its star, cards glide and grow in. Spatial sound comes from where things happen, with light controller haptics. *More → Motion* (or the system's reduce-motion setting) turns animation off. |
-| **Mochi** | A small companion low in your left periphery that notices things: two notes that seem related, a question between topics. One pinch on its bubble shows you; it falls asleep when you are away and steps aside while you write. *More → Mochi* turns it off. |
+| **Mochi** | A small companion beside the card you read that notices things: two notes that seem related (and why), a question between topics. A gold badge counts what it found; its bubble has *Show*, *Connect* and *Not related*; a poke brings the next one; it falls asleep when you are away and steps aside while you write. *More → Mochi* turns it off. |
 | **Mixed reality** | With passthrough, scene understanding finds your real desk (the graph stands on it) and the wall on your left (the thinking wall hangs in front of it). |
 
 Hands first: everything works without controllers (controllers and a mouse work too). Content is
@@ -134,7 +134,7 @@ NetNote 是一款 VR 原生笔记应用：把 Markdown / Obsidian 笔记摊在�
   `https://电脑IP:8081/`，选择继续访问，点「进入 VR」或「进入混合现实」。
 - **在头显里**：捏星星阅读；在空白处捏住移动整个房间，双手拉开缩放；捏住一颗星拖到另一颗上连线，
   并用 Quest 键盘或语音写下原因；左手边是思考墙，并排放的卡片成为一组，会告诉你共同话题、缺的那篇和一个问题；
-  「洞察」列出隐藏联系、值得追问、还没写的笔记和漂流的笔记；「手中地图」指一下就把那里滑到面前；
+  「洞察」列出隐藏联系、值得追问、还没写的笔记和漂流的笔记；「手中地图」抓住光环可以随意旋转，大星图跟着转，指一下某颗星就把它转到面前；卡片上「编辑」可按段落修改、插入、删除；
   混合现实下星图会放到你的真实桌面上，思考墙贴在左侧真实的墙前。
 - **数据**：都存在浏览器里（IndexedDB），可在入口页导入 zip/文件夹、导出 zip。
 - **探索**：卡片上「找路径」再捏另一颗星，显示最短链接路径；「更多」里有漫游、时光机、声音、动效、糯糯（陪伴小精灵，只在左下余光处，不挡视线）。

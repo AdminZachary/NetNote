@@ -99,6 +99,7 @@ async function immersive(browser) {
   await pinch(page, 0);
   await page.waitForTimeout(700);
   check('pinching a star opens its card (hands)', (await state(page)).cards[0] === 'Memory.md');
+  await page.waitForFunction(() => !window.netnote.app.turn, null, { timeout: 5000 }); // the graph has turned it to you
 
   const pair = await page.evaluate(() => {
     const { app } = window.netnote;
@@ -242,24 +243,67 @@ async function insights(browser) {
   await page.waitForTimeout(600);
   const still = await page.evaluate((k) => window.netnote.app.insightsPanel.rows.some((r) => r.key === k), linkedKey);
   check('a connected suggestion leaves the list', !still);
-  // the map in your hand: pick a note and the big graph glides it in front of you
+  // the map in your hand: pick a note and the big graph turns it round to face you
   await page.evaluate(() => window.netnote.app.onDock('map'));
   await page.waitForTimeout(600);
-  const jumped = await page.evaluate(async () => {
+  const facing = (id) =>
+    page.evaluate((id) => {
+      const { app } = window.netnote;
+      app.graph.root.updateMatrixWorld();
+      const c = app.graph.centre().applyMatrix4(app.graph.root.matrixWorld);
+      const p = app.graph.worldPos(id);
+      const e = app.world.camera.getWorldPosition(p.clone());
+      const a = Math.atan2(p.x - c.x, p.z - c.z) - Math.atan2(e.x - c.x, e.z - c.z);
+      return Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) * (180 / Math.PI);
+    }, id);
+  // pick the note that is furthest round the back right now
+  const far = await page.evaluate(() => {
     const { app } = window.netnote;
-    const visible = app.state.minimap;
-    app.minimap.onPick('Walking.md');
-    await new Promise((r) => setTimeout(r, 700));
-    const head = app.world.camera.position;
-    const p = app.graph.worldPos('Walking.md');
-    return { visible, selected: app.state.selected, dist: p.distanceTo(head) };
+    app.graph.root.updateMatrixWorld();
+    const c = app.graph.centre().applyMatrix4(app.graph.root.matrixWorld);
+    const e = app.world.camera.getWorldPosition(c.clone());
+    let best = null;
+    let bestA = 0;
+    for (const n of app.graph.nodes) {
+      if (!app.library.vault.notes.has(n.id)) continue;
+      const p = app.graph.worldPos(n.id);
+      const a = Math.abs(
+        Math.atan2(
+          Math.sin(Math.atan2(p.x - c.x, p.z - c.z) - Math.atan2(e.x - c.x, e.z - c.z)),
+          Math.cos(Math.atan2(p.x - c.x, p.z - c.z) - Math.atan2(e.x - c.x, e.z - c.z)),
+        ),
+      );
+      if (Math.hypot(p.x - c.x, p.z - c.z) > 0.2 && a > bestA) {
+        bestA = a;
+        best = n.id;
+      }
+    }
+    return best;
   });
-  check('the map in your hand shows', jumped.visible);
-  check(
-    'picking a note on the map brings it in front of you',
-    jumped.selected === 'Walking.md' && Math.abs(jumped.dist - 1.4) < 0.15,
-    `${jumped.dist.toFixed(2)} m`,
-  );
+  const yaw0 = await facing(far);
+  const visible = await page.evaluate((id) => {
+    const { app } = window.netnote;
+    app.minimap.onPick(id);
+    return app.state.minimap;
+  }, far);
+  await page.waitForTimeout(2600);
+  const yaw1 = await facing(far);
+  check('the map in your hand shows', visible);
+  check('picking a note on the map turns the graph so it faces you', yaw1 < 15 && yaw0 > 60, `${yaw0.toFixed(0)}° → ${yaw1.toFixed(0)}°`);
+  const turned = await page.evaluate(async () => {
+    const { app } = window.netnote;
+    const Q = app.graph.root.quaternion.constructor;
+    const V = app.graph.root.position.constructor;
+    const q0 = app.graph.root.quaternion.clone();
+    app.minimap.onRotate(new Q().setFromAxisAngle(new V(1, 0, 0), 0.5));
+    await new Promise((r) => setTimeout(r, 200));
+    return {
+      big: app.graph.root.quaternion.angleTo(q0),
+      map: app.minimap.group.quaternion.angleTo(app.graph.root.quaternion),
+      bezel: !!app.minimap.group.getObjectByName('minimap-bezel'),
+    };
+  });
+  check('turning the map turns the big graph with it, freely', turned.bezel && Math.abs(turned.big - 0.5) < 0.02 && turned.map < 0.01, JSON.stringify(turned));
   check('no page errors (insights)', errors.length === 0, errors[0]);
   await ctx.close();
 }
@@ -479,6 +523,86 @@ async function explore(browser) {
   check('it steps aside while you write', writing.composer && !writing.companion.visible, JSON.stringify({ composer: writing.composer, ...writing.companion }));
   await app(() => window.netnote.app.cancelComposer());
   await page.waitForTimeout(200);
+  // editing a note block by block
+  await app(() => window.netnote.app.select('Walking.md'));
+  await page.waitForTimeout(300);
+  const ed = await app(() => {
+    const a = window.netnote.app;
+    const c = a.cards[0];
+    c.repaint();
+    const r = c.regionCenter('edit');
+    c.clickAt(r.x, r.y);
+    const e = a.editor;
+    e.repaint();
+    return { open: e.mesh.visible, blocks: e.model.blocks.length };
+  });
+  check('"Edit" opens the note block by block', ed.open && ed.blocks >= 2, `${ed.blocks} blocks`);
+  const edited = await app(async () => {
+    const a = window.netnote.app;
+    const e = a.editor;
+    const press = (id, data) => {
+      e.repaint();
+      const r = e.regionCenter(id, data);
+      e.clickAt(r.x, r.y);
+    };
+    press('block', '1');
+    const was = a.input.text;
+    a.input.clear();
+    a.input.setText('Walking loosens a stuck thought.');
+    press('save');
+    await new Promise((r) => setTimeout(r, 800));
+    const raw = window.netnote.library.vault.notes.get('Walking.md').raw;
+    return { was, raw, open: e.mesh.visible };
+  });
+  check(
+    'changing one block and saving rewrites just that block',
+    !edited.open && edited.raw.includes('Walking loosens a stuck thought.') && !edited.raw.includes(edited.was) && edited.raw.startsWith('---\ncreated:'),
+    edited.was.slice(0, 40),
+  );
+  // the companion: beside the card, on top, with buttons that act
+  await app(() => window.netnote.app.onTool('pet'));
+  await app(() => window.netnote.app.onTool('pet'));
+  const mochi = await app(async () => {
+    const a = window.netnote.app;
+    a.brain.poke(performance.now());
+    await new Promise((r) => setTimeout(r, 600));
+    const card = a.cards[0].mesh;
+    const pos = a.companion.group.position;
+    const local = card.worldToLocal(pos.clone());
+    return {
+      buttons: a.brain.speech?.buttons ?? [],
+      pair: a.brain.speech?.pair,
+      local: [local.x, local.y, local.z],
+      cardW: a.cards[0].widthM,
+      onTop: a.companion.bubble.mesh.material.depthTest === false,
+    };
+  });
+  check(
+    'it sits just outside the card, in front of it, and its bubble is never hidden',
+    mochi.local[0] < -mochi.cardW / 2 && mochi.local[2] > 0 && mochi.onTop,
+    mochi.local.map((x) => x.toFixed(2)).join(','),
+  );
+  check('a poke brings a possible link with Show / Connect / Not related', mochi.buttons.join() === 'show,connect,dismiss' && !!mochi.pair);
+  const shown = await app(async () => {
+    const a = window.netnote.app;
+    const b = a.companion.bubble;
+    b.repaint();
+    const r = b.regionCenter('show');
+    b.clickAt(r.x, r.y);
+    const pair = a.brain.speech?.pair;
+    await new Promise((r) => setTimeout(r, 400));
+    return { selected: a.state.selected, pair, flows: a.state.flows };
+  });
+  check('"Show" opens the pair and lights the way between them', shown.selected === shown.pair?.[0] && shown.flows > 0);
+  const n0 = await app(() => window.netnote.app.brain.waiting);
+  await app(() => {
+    const b = window.netnote.app.companion.bubble;
+    b.repaint();
+    const r = b.regionCenter('dismiss');
+    b.clickAt(r.x, r.y);
+  });
+  const n1 = await app(() => window.netnote.app.brain.waiting);
+  check('"Not related" drops the suggestion', n1 === n0 - 1, `${n0} → ${n1}`);
   await page.reload();
   await ready(page);
   const s4 = await state(page);

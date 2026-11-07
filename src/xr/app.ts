@@ -70,9 +70,12 @@ import { FlowField, type FlowLink } from './motion/flows';
 import { Tethers, type TetherSpec } from './motion/tethers';
 import { easeOutCubic, follow, MOTION, popScale, reduceMotion, setReduceMotion } from './motion/ease';
 import { Sound } from './audio/sfx';
-import { CompanionBrain, type SpeechAction } from './companion/brain';
+import { CompanionBrain, type SpeechButton } from './companion/brain';
 import { Companion } from './companion/companion';
 import { ToolsRow, type ToolAction } from './ui/tools';
+import { NoteEditor } from './ui/note-editor';
+import { joinBlocks, splitBlocks } from '../core/markdown/blocks';
+import { rotateAbout, turnSeconds, yawToFace } from './interaction/turn';
 import { countAt, nextTourStop, playbackStep, shortestPath, timeline, type Born } from '../core/explore/explore';
 
 type Pos = { x: number; y: number; z: number };
@@ -97,7 +100,8 @@ type WriteMode =
   | { kind: 'reason'; from: string; to: string }
   | { kind: 'search' }
   | { kind: 'answer'; paths: string[]; question: string }
-  | { kind: 'rename'; path: string };
+  | { kind: 'rename'; path: string }
+  | { kind: 'edit'; path: string; front: string; blocks: string[]; index: number; dirty: boolean };
 
 interface WallZoom {
   z: number;
@@ -133,6 +137,7 @@ export class NetNoteApp {
   readonly tethers = new Tethers();
   readonly sound = new Sound();
   readonly tools = new ToolsRow();
+  readonly editor = new NoteEditor();
   readonly companion = new Companion();
   readonly brain: CompanionBrain;
   /** card motion: where each shelf card is gliding to, when it appeared, when its note changed */
@@ -142,7 +147,6 @@ export class NetNoteApp {
   private path: string[] | null = null;
   /** a pair the companion is showing */
   private suggestPair: [string, string] | null = null;
-  private suggestIndex = 0;
   private linkRows: InsightRow[] = [];
   private questionRows: InsightRow[] = [];
   private touring: { visited: string[]; next: number } | null = null;
@@ -151,6 +155,8 @@ export class NetNoteApp {
   private dismissed = new Set<string>();
   private rowsByKey = new Map<string, InsightRow>();
   private glide: { from: Vector3; to: Vector3; t0: number } | null = null;
+  /** the graph turning a note round to face you (yaw about its centre, eased) */
+  private turn: { angle: number; done: number; t0: number; dur: number } | null = null;
   /** cards hanging on the wall, and where */
   readonly onWall = new Map<NoteCard, WallSpot>();
   private zoom = new Map<NoteCard, WallZoom>();
@@ -220,17 +226,29 @@ export class NetNoteApp {
     this.insightsPanel.mesh.visible = false;
     this.insightsPanel.onAction = (id, data) => this.onInsights(id, data);
     this.minimap.onPick = (id) => this.jumpTo(id);
+    this.minimap.onRotate = (q) => {
+      this.turn = null;
+      this.glide = null;
+      this.manip.cancel();
+      this.graph.root.updateMatrixWorld();
+      rotateAbout(this.graph.root, this.graphCentreWorld(), q);
+    };
+    this.minimap.onTurnTick = () => this.sound.play('hover', this.minimap.group.position, this.world.session, 'right');
+    scene.add(this.minimap.baseGroup);
     this.minimap.onHover = (id) => this.graph.setHovered(id);
     scene.add(this.hint.mesh);
     // motion, sound and the companion
     this.graph.root.add(this.flows.points);
     scene.add(this.tethers.lines);
     this.register(this.tools.mesh, true);
+    this.register(this.editor.mesh, true);
+    this.editor.mesh.visible = false;
+    this.editor.onAction = (id, data) => this.onEditor(id, data);
     this.tools.mesh.visible = false;
     this.tools.onAction = (id) => this.onTool(id as ToolAction);
     this.register(this.companion.group, false);
     this.register(this.companion.bubble.mesh, true);
-    this.companion.bubble.onAction = () => this.onCompanion();
+    this.companion.bubble.onAction = (id) => this.onCompanion(id as SpeechButton);
     (this.companion.group as unknown as { addEventListener(t: string, f: (e: XRPointerEvent) => void): void }).addEventListener('pointerup', (e) => {
       e.stopPropagation();
       this.brain.poke(performance.now());
@@ -238,9 +256,16 @@ export class NetNoteApp {
     });
     this.brain = new CompanionBrain(
       {
-        suggestions: () => this.linkRows.filter((r) => r.pair).map((r) => ({ a: r.pair![0], b: r.pair![1] })),
+        suggestions: () =>
+          this.linkRows
+            .filter((r) => r.pair)
+            .map((r) => {
+              const [a, b] = r.pair!;
+              const name = (id: string): string => this.library.vault?.notes.get(id)?.name ?? id;
+              return { a, b, aName: name(a), bName: name(b), why: r.sub };
+            }),
         questions: () => this.questionRows.map((r) => r.title),
-        writing: () => this.composer.mesh.visible || this.search.mesh.visible,
+        writing: () => this.writing || this.search.mesh.visible,
         busy: () => !!this.touring || !!this.timeMachine,
       },
       performance.now(),
@@ -451,10 +476,11 @@ export class NetNoteApp {
     this.graph.update(this.world.camera, dt);
     this.followLazily(eye, quat);
     this.animateCards(dt, reduced);
-    for (const s of [this.dock, this.tools, this.composer, this.search, this.insightsPanel, ...this.cards, ...this.tags]) s.update();
+    for (const s of [this.dock, this.tools, this.composer, this.editor, this.search, this.insightsPanel, ...this.cards, ...this.tags]) s.update();
     this.hint.update();
     this.hint.tick(dt);
     if (this.composer.mesh.visible) this.composer.tick(dt);
+    if (this.editor.mesh.visible) this.editor.tick(dt);
     this.updateConnect();
     this.updatePanelDrag();
     this.updateWall(dt);
@@ -529,6 +555,7 @@ export class NetNoteApp {
       if (!id) return;
       e.stopPropagation();
       this.stopAutoTour();
+      this.turn = null; // a star you grab stays where it is
       this.sound.play('grab', e.point, this.world.session);
       this.connect = { pointerId: e.pointerId, from: id, startDir: dirOf(e), moved: false, target: null };
       this.graph.root.setPointerCapture(e.pointerId);
@@ -634,7 +661,7 @@ export class NetNoteApp {
 
   // ---------- reading ----------
 
-  select(path: string, opts: { auto?: boolean } = {}): void {
+  select(path: string, opts: { auto?: boolean; turned?: boolean } = {}): void {
     const vault = this.library.vault;
     if (!vault) return;
     if (!opts.auto) {
@@ -666,6 +693,7 @@ export class NetNoteApp {
       return;
     }
     this.graph.setSelected(path);
+    if (!opts.turned) this.turnTo(path);
     this.showCard(path);
     this.sound.play('select', this.graph.worldPos(path) ?? this.home.position, this.world.session);
     this.tourDone('read');
@@ -688,14 +716,7 @@ export class NetNoteApp {
     }
     const m = this.motion.get(c);
     if (m && c.path !== path) m.swap = performance.now();
-    if (!card) {
-      const nb = this.graph.neighboursOf(path);
-      const rel = related.find((r) => !nb.has(r.path));
-      this.brain.opened(
-        { path, name: view.note.name, backlinks: view.backlinks.length, related: rel ? { path: rel.path, name: rel.name } : undefined },
-        performance.now(),
-      );
-    }
+    if (!card) this.brain.opened({ path, name: view.note.name, backlinks: view.backlinks.length }, performance.now());
     c.show({
       view,
       color: this.graph.colorOf(path),
@@ -794,7 +815,7 @@ export class NetNoteApp {
         this.showCard(path, card);
         break;
       case 'edit':
-        this.openComposer({ kind: 'append', path });
+        this.openEditor(path);
         break;
       case 'rename':
         this.openComposer({ kind: 'rename', path }, this.library.vault?.notes.get(path)?.name ?? '');
@@ -932,6 +953,124 @@ export class NetNoteApp {
     this.composer.mesh.visible = true;
     this.dock.mesh.visible = false;
     if (!this.immersive) this.input.showKeyboard(); // desktop: type straight away
+  }
+
+  /** Is a writing panel (the writing card or the note editor) open? */
+  get writing(): boolean {
+    return this.composer.mesh.visible || this.editor.mesh.visible;
+  }
+
+  // ---------- editing a note, block by block ----------
+
+  private openEditor(path: string): void {
+    const note = this.library.vault?.notes.get(path);
+    if (!note) return;
+    this.closeComposer();
+    const { front, blocks } = splitBlocks(note.raw);
+    // a title-only note still gets a block to write in
+    if (!blocks.length) blocks.push('');
+    const mode: WriteMode = { kind: 'edit', path, front, blocks, index: blocks.length - 1, dirty: false };
+    this.writeMode = mode;
+    const render = (): void => {
+      if (this.writeMode !== mode) return;
+      if (this.input.text !== mode.blocks[mode.index]) {
+        mode.blocks[mode.index] = this.input.text;
+        mode.dirty = true;
+      }
+      this.editor.set({
+        name: note.name,
+        accent: this.graph.colorOf(path),
+        blocks: mode.blocks,
+        index: mode.index,
+        text: this.input.text,
+        keyboardOpen: this.input.keyboardOpen,
+        dirty: mode.dirty,
+      });
+    };
+    this.input.begin(mode.blocks[mode.index]!, render, { multiline: true });
+    this.input.onSubmit = () => void this.saveEditor();
+    this.input.onCancel = () => this.closeEditor();
+    render();
+    const p = shelfPoint(this.home, 0, -0.06, 0.66);
+    this.editor.mesh.position.copy(p);
+    faceTowards(this.editor.mesh, this.home.position);
+    this.editor.mesh.visible = true;
+    this.dock.mesh.visible = false;
+    this.tools.mesh.visible = false;
+    if (!this.immersive) this.input.showKeyboard();
+  }
+
+  private onEditor(id: string, data: string | undefined): void {
+    const mode = this.writeMode;
+    if (mode?.kind !== 'edit') return;
+    const choose = (i: number): void => {
+      mode.blocks[mode.index] = this.input.text;
+      mode.index = Math.max(0, Math.min(mode.blocks.length - 1, i));
+      this.input.setText(mode.blocks[mode.index]!);
+    };
+    switch (id) {
+      case 'type':
+        this.input.showKeyboard();
+        break;
+      case 'block':
+        choose(Number(data));
+        break;
+      case 'prev':
+        choose(mode.index - 1);
+        break;
+      case 'next':
+        choose(mode.index + 1);
+        break;
+      case 'word':
+        this.input.deleteWord();
+        break;
+      case 'clear':
+        this.input.clear();
+        break;
+      case 'below':
+        mode.blocks[mode.index] = this.input.text;
+        mode.blocks.splice(mode.index + 1, 0, '');
+        mode.dirty = true;
+        choose(mode.index + 1);
+        this.input.showKeyboard();
+        break;
+      case 'remove':
+        mode.blocks.splice(mode.index, 1);
+        if (!mode.blocks.length) mode.blocks.push('');
+        mode.dirty = true;
+        mode.index = Math.min(mode.index, mode.blocks.length - 1);
+        this.input.setText(mode.blocks[mode.index]!);
+        break;
+      case 'save':
+        void this.saveEditor();
+        break;
+      case 'cancel':
+        this.closeEditor();
+        break;
+    }
+  }
+
+  private async saveEditor(): Promise<void> {
+    const mode = this.writeMode;
+    if (mode?.kind !== 'edit') return;
+    mode.blocks[mode.index] = this.input.end();
+    const raw = joinBlocks({ front: mode.front, blocks: mode.blocks });
+    this.closeEditor();
+    try {
+      await this.library.saveNote(mode.path, raw);
+      this.toast(t().saved);
+      this.brain.saved(performance.now());
+      this.showCard(mode.path);
+    } catch (e) {
+      this.toast(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  private closeEditor(): void {
+    this.input.end();
+    this.editor.mesh.visible = false;
+    this.dock.mesh.visible = true;
+    if (this.writeMode?.kind === 'edit') this.writeMode = null;
   }
 
   private onComposer(id: string): void {
@@ -1318,13 +1457,23 @@ export class NetNoteApp {
   // ---------- overview: territories, the map in your hand, insights ----------
 
   private updateOverview(dt: number, eye: Vector3, quat: Quaternion): void {
+    if (this.turn) {
+      const tn = this.turn;
+      const k = reduceMotion() ? 1 : Math.min(1, (performance.now() - tn.t0) / (tn.dur * 1000));
+      const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+      const step = tn.angle * e - tn.done;
+      tn.done += step;
+      this.graph.root.updateMatrixWorld();
+      rotateAbout(this.graph.root, this.graphCentreWorld(), new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), step));
+      if (k >= 1) this.turn = null;
+    }
     if (this.glide) {
       const k = Math.min(1, (performance.now() - this.glide.t0) / 450);
       const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
       this.graph.root.position.lerpVectors(this.glide.from, this.glide.to, e);
       if (k >= 1) this.glide = null;
     }
-    this.territories.target = this.composer.mesh.visible ? 0.3 : 1;
+    this.territories.target = this.writing ? 0.3 : 1;
     this.territories.maxElevationDeg = this.immersive ? 18 : 9;
     this.territories.update(dt, eye);
     // above your left hand when it is tracked, else beside the menu
@@ -1357,8 +1506,33 @@ export class NetNoteApp {
     return p.lengthSq() > 1e-6 ? p : null;
   }
 
-  /** Glide the graph (translation only, short ease) so a note ends up ~1.4 m in front of your eyes. */
+  /**
+   * Turn the whole graph about its centre so `id` comes round to the side facing you. Small turns
+   * (under 12°) are skipped: the note is already in front of you.
+   */
+  turnTo(id: string): boolean {
+    this.graph.root.updateMatrixWorld();
+    const at = this.graph.worldPos(id);
+    if (!at) return false;
+    const c = this.graphCentreWorld();
+    const eye = this.headPose().pos;
+    // inside the graph (zoomed right in) turning would swing it past you: glide instead
+    const radiusW = this.graph.radius() * this.graph.root.scale.x;
+    if (eye.distanceTo(c) < radiusW * 1.05) return false;
+    const angle = yawToFace(c, at, eye);
+    if (Math.abs(angle) < (12 * Math.PI) / 180) return true;
+    this.manip.cancel();
+    this.glide = null;
+    this.turn = { angle, done: 0, t0: performance.now(), dur: turnSeconds(angle) };
+    return true;
+  }
+
+  /** Bring a note in front of you: turn the graph (or, when you are inside it, glide it ~1.4 m in front). */
   jumpTo(id: string): void {
+    if (this.turnTo(id)) {
+      this.select(id, { turned: true });
+      return;
+    }
     const at = this.graph.worldPos(id);
     if (!at) return;
     const { pos, quat } = this.headPose();
@@ -1368,7 +1542,7 @@ export class NetNoteApp {
     const want = pos.clone().addScaledVector(fwd, 1.4);
     want.y = pos.y - 0.12;
     this.glide = { from: this.graph.root.position.clone(), to: this.graph.root.position.clone().add(want.sub(at)), t0: performance.now() };
-    this.select(id);
+    this.select(id, { turned: true });
   }
 
   private openInsights(): void {
@@ -1611,7 +1785,7 @@ export class NetNoteApp {
   /** A thread from each shelf card's left edge to its star. */
   private updateTethers(): void {
     const specs: TetherSpec[] = [];
-    const dim = this.composer.mesh.visible ? 0.35 : 1;
+    const dim = this.writing ? 0.35 : 1;
     for (const c of this.cards) {
       if (!c.path || !c.mesh.visible || this.onWall.has(c) || !this.graph.isBorn(c.path)) continue;
       const to = this.graph.worldPos(c.path);
@@ -1700,7 +1874,7 @@ export class NetNoteApp {
   private updateExplore(dt: number): void {
     const now = performance.now();
     const tour = this.touring;
-    if (tour && now > tour.next && !this.composer.mesh.visible) {
+    if (tour && now > tour.next && !this.writing) {
       const vault = this.library.vault;
       const cur = this.graph.selected;
       if (cur) tour.visited.push(cur);
@@ -1788,44 +1962,65 @@ export class NetNoteApp {
     this.brain.tick(now);
     for (const a of this.brain.acts.splice(0)) this.companion.play(a);
     // fades away while you write, search or read the insights: it never covers what you work on
-    const busyPanel = this.composer.mesh.visible || this.search.mesh.visible || this.insightsPanel.mesh.visible;
+    const busyPanel = this.writing || this.search.mesh.visible || this.insightsPanel.mesh.visible;
     this.companion.shown = this.brain.enabled && !busyPanel ? 1 : 0;
-    // low in the left periphery, following your body lazily (the dock's direction), never your head
-    const yaw = this.immersive ? this.dockYaw : yawOf(quat);
-    const az = ((this.immersive ? Math.min(31, this.fov.left - 8) : 24) * Math.PI) / 180;
-    const pitch = ((this.immersive ? -Math.min(33, this.fov.down - 8) : -13) * Math.PI) / 180;
-    const r = this.immersive ? 0.72 : 1.25;
-    const dir = new Vector3(-Math.sin(yaw + az) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw + az) * Math.cos(pitch));
-    const at = eye.clone().addScaledVector(dir, r);
+    // just outside the lower-left corner of the card you read, a little in front of it (never behind
+    // or over its text); with no card open, at the left end of the menu
+    const card = this.cards.find((c) => c.mesh.visible && c.path && !this.onWall.has(c) && !this.pinned.has(c.path));
+    const size = 0.075;
+    const at = new Vector3();
+    if (card) {
+      card.mesh.updateMatrixWorld();
+      card.mesh.localToWorld(at.set(-card.widthM / 2 - size * 0.55, -card.heightM / 2 + size * 0.5, 0.05));
+    } else {
+      this.dock.mesh.updateMatrixWorld();
+      this.dock.mesh.localToWorld(at.set(-this.dock.widthM / 2 - size * 0.8, size * 0.2, 0.03));
+    }
     const look = this.brain.focus[0] ? this.graph.worldPos(this.brain.focus[0]) : null;
-    this.companion.update(dt, at, eye, this.immersive ? 0.1 : 0.13, this.brain.mood, this.brain.enabled ? this.brain.speech : null, reduced, look);
+    this.companion.setBadge(this.brain.waiting);
+    this.companion.update(dt, at, eye, size * (this.immersive ? 1 : 1.25), this.brain.mood, this.brain.enabled ? this.brain.speech : null, reduced, look);
+    void quat;
   }
 
-  private onCompanion(): void {
+  private onCompanion(id: SpeechButton): void {
     const s = this.brain.speech;
-    const act: SpeechAction | undefined = s?.action;
-    this.brain.hush();
-    if (!act) return;
-    if (act.kind === 'insights') {
-      this.insightTab = 'questions';
-      this.openInsights();
-      return;
+    const now = performance.now();
+    const pair = s?.pair;
+    switch (id) {
+      case 'insights':
+        this.brain.hush();
+        this.insightTab = 'questions';
+        this.openInsights();
+        return;
+      case 'next':
+        this.brain.presentNext(now);
+        return;
+      case 'show':
+        if (!pair) return;
+        // the pair lights up, gold flows between them, and the graph turns them towards you
+        this.stopAutoTour();
+        this.path = null;
+        this.select(pair[0], { auto: true });
+        this.suggestPair = pair;
+        this.graph.setHighlight(pair);
+        this.sound.play('link', this.graph.worldPos(pair[1]) ?? this.home.position, this.world.session);
+        if (s) s.buttons = ['connect', 'dismiss'];
+        this.companion.bubble.invalidate();
+        return;
+      case 'connect':
+        this.brain.hush();
+        if (pair) void this.beginConnection(pair[0], pair[1]);
+        return;
+      case 'dismiss':
+        if (!pair) return;
+        this.dismissed.add(pairKey(pair[0], pair[1]));
+        void this.library.setState('dismissed', [...this.dismissed]).catch(() => undefined);
+        this.suggestPair = null;
+        this.graph.setHighlight([]);
+        this.renderInsights();
+        this.brain.say(t().petDismissed, now, { force: true, ms: 2200 });
+        return;
     }
-    let pair: [string, string] | null = null;
-    if (act.kind === 'suggest') pair = [act.a, act.b];
-    else {
-      const rows = this.linkRows.filter((r) => r.pair);
-      const row = rows[this.suggestIndex++ % Math.max(1, rows.length)];
-      if (row?.pair) pair = row.pair;
-      if (row) this.toast(row.sub || row.title);
-    }
-    if (!pair) return;
-    this.stopAutoTour();
-    this.path = null;
-    this.select(pair[0], { auto: true });
-    this.suggestPair = pair;
-    this.graph.setHighlight(pair);
-    this.sound.play('link', this.graph.worldPos(pair[1]) ?? this.home.position, this.world.session);
   }
 
   /** Repaint every panel after the language changed. */
@@ -1866,7 +2061,7 @@ export class NetNoteApp {
       wall: [...this.onWall.keys()].map((c) => c.path),
       groups: this.tags.map((x) => x.paths),
       selected: this.graph.selected,
-      composer: this.composer.mesh.visible,
+      composer: this.writing,
       search: this.search.mesh.visible,
       insights: this.insightsPanel.mesh.visible,
       minimap: this.minimap.visible,

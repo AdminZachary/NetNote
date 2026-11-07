@@ -4,7 +4,10 @@ import { CompanionBrain, type WorldView } from '../../src/xr/companion/brain';
 import { BUZZ, buzz, CUES } from '../../src/xr/audio/sfx';
 
 const world = (over: Partial<WorldView> = {}): WorldView => ({
-  suggestions: () => [{ a: 'A.md', b: 'B.md' }],
+  suggestions: () => [
+    { a: 'A.md', b: 'B.md', aName: 'A', bName: 'B', why: 'both mention sleep' },
+    { a: 'C.md', b: 'B.md', aName: 'C', bName: 'B', why: 'shared words' },
+  ],
   questions: () => ['How does sleep relate to memory?'],
   writing: () => false,
   busy: () => false,
@@ -17,7 +20,7 @@ describe('companion brain', () => {
     const b = new CompanionBrain(world(), 0, () => 0);
     b.insightsReady(1000, 9);
     expect(b.speech?.text).toMatch(/Good morning/);
-    expect(b.speech?.action).toEqual({ kind: 'next' });
+    expect(b.speech?.buttons).toEqual(['next']);
     b.hush();
     b.insightsReady(2000, 9);
     expect(b.speech).toBeNull();
@@ -35,10 +38,13 @@ describe('companion brain', () => {
     const b = new CompanionBrain(world(), 0, () => 0);
     b.linked(0);
     b.hush();
-    b.opened({ path: 'A.md', name: 'A', backlinks: 3, related: { path: 'B.md', name: 'B' } }, 5000);
+    b.opened({ path: 'A.md', name: 'A', backlinks: 3 }, 5000);
     expect(b.speech).toBeNull();
-    b.opened({ path: 'C.md', name: 'C', backlinks: 3, related: { path: 'B.md', name: 'B' } }, 30_000);
-    expect(b.speech?.action).toEqual({ kind: 'suggest', a: 'C.md', b: 'B.md' });
+    b.opened({ path: 'B.md', name: 'B', backlinks: 3 }, 30_000);
+    // seen from the note you opened: B first, with why, and buttons to act
+    expect(b.speech?.pair).toEqual(['B.md', 'A.md']);
+    expect(b.speech?.sub).toBe('both mention sleep');
+    expect(b.speech?.buttons).toEqual(['show', 'connect', 'dismiss']);
   });
   it('falls asleep when you are away and wakes when you are back', () => {
     const b = new CompanionBrain(world(), 0, () => 0);
@@ -48,7 +54,7 @@ describe('companion brain', () => {
     expect(b.mood).toBe('surprised');
     expect(b.acts).toContain('hop');
   });
-  it('shares an ambient thought at most every four minutes', () => {
+  it('shares an ambient thought at most every three minutes', () => {
     const b = new CompanionBrain(world(), 0, () => 0);
     let spoke = 0;
     for (let now = 0; now < 600_000; now += 5000) {
@@ -59,8 +65,21 @@ describe('companion brain', () => {
         b.hush();
       }
     }
-    expect(spoke).toBeLessThanOrEqual(2);
+    expect(spoke).toBeLessThanOrEqual(3);
     expect(spoke).toBeGreaterThanOrEqual(1);
+  });
+  it('a poke always brings the next possible link, cycling', () => {
+    const b = new CompanionBrain(world(), 0, () => 0);
+    b.poke(1000);
+    expect(b.speech?.pair).toEqual(['A.md', 'B.md']);
+    b.poke(2000);
+    expect(b.speech?.pair).toEqual(['C.md', 'B.md']);
+    expect(b.waiting).toBe(2);
+  });
+  it('without links to offer, a poke offers a question', () => {
+    const b = new CompanionBrain(world({ suggestions: () => [] }), 0, () => 0);
+    b.poke(1000);
+    expect(b.speech?.buttons).toEqual(['insights']);
   });
   it('not chatty: only answers a poke', () => {
     const b = new CompanionBrain(world(), 0, () => 0.9);
