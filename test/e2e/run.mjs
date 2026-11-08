@@ -480,6 +480,147 @@ async function mixedReality(browser) {
   await ctx.close();
 }
 
+/** Hands only: press the menu with a fingertip, turn the left palm up for the map, zoom with its rail. */
+async function handsDirect(browser) {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: true });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await ready(page);
+  await page.click('[data-testid=enter-vr]');
+  await page.waitForFunction(() => window.netnote.world.visibilityState.value !== 'non-immersive', null, { timeout: 20000 });
+  await page.evaluate(() => {
+    window.IWER_DEVICE.controlMode = 'programmatic';
+    window.IWER_DEVICE.primaryInputMode = 'hand';
+  });
+  await page.waitForTimeout(1200);
+  // push the right index fingertip through a button on the menu and back out
+  const poke = (id, quietFirst = false) =>
+    page.evaluate(
+      async ([id, quietFirst]) => {
+        const { app, world } = window.netnote;
+        const d = app.dock;
+        const V = d.mesh.position.constructor;
+        const Q = d.mesh.quaternion.constructor;
+        d.repaint();
+        const r = d.regionCenter(id);
+        const btn = d.mesh.localToWorld(new V((r.x / d.pxW - 0.5) * d.widthM, (0.5 - r.y / d.pxH) * d.heightM, 0));
+        const n = new V(0, 0, 1).applyQuaternion(d.mesh.getWorldQuaternion(new Q()));
+        const hand = window.IWER_DEVICE.hands.right;
+        const tip = world.player.indexTipSpaces.right;
+        const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+        const tipNow = () => {
+          tip.updateMatrixWorld();
+          return new V().setFromMatrixPosition(tip.matrixWorld);
+        };
+        let acted = null;
+        const was = d.onAction;
+        d.onAction = (a, ...rest) => {
+          acted = a;
+          was?.(a, ...rest);
+        };
+        if (quietFirst) {
+          app.input.begin('', () => undefined);
+          app.input.onTyped?.();
+        }
+        const dist = btn.distanceTo(world.camera.getWorldPosition(new V()));
+        for (const k of [0.06, 0.02, 0.005, -0.008, 0.06]) {
+          if (quietFirst) app.input.onTyped?.(); // still typing
+          const want = btn.clone().addScaledVector(n, k);
+          for (let i = 0; i < 3; i++) {
+            const off = want.clone().sub(tipNow());
+            hand.position.set(hand.position.x + off.x, hand.position.y + off.y, hand.position.z + off.z);
+            await wait(110);
+          }
+        }
+        d.onAction = was;
+        if (quietFirst) app.input.end();
+        return { acted, dist };
+      },
+      [id, quietFirst],
+    );
+  const typed = await poke('search', true);
+  check('while you type, a resting fingertip presses nothing', typed.acted === null, String(typed.acted));
+  await page.waitForTimeout(600);
+  const pressed = await poke('search');
+  check('a fingertip press on the menu works (no ray needed)', pressed.acted === 'search', String(pressed.acted));
+  check('with hands, the menu sits within reach of a fingertip', pressed.dist < 0.56, `${pressed.dist.toFixed(2)} m`);
+  await page.evaluate(() => window.netnote.app.closeSearch?.());
+  await page.waitForTimeout(300);
+
+  // the left hand held out in front, palm down, then turned palm up towards you
+  const palm = (up) =>
+    page.evaluate((up) => {
+      const left = window.IWER_DEVICE.hands.left;
+      left.position.set(-0.12, 1.25, -0.35);
+      const s = Math.SQRT1_2;
+      // palm up: rolled half a turn about the forearm (z), then tipped a little towards the eyes
+      if (up) left.quaternion.set(0, 0, 1, 0);
+      else left.quaternion.set(0, 0, 0, 1);
+      void s;
+    }, up);
+  await palm(false);
+  await page.waitForTimeout(800);
+  const before = await page.evaluate(() => window.netnote.app.minimap.visible);
+  await palm(true);
+  await page.waitForTimeout(1000);
+  const shown = await page.evaluate(() => {
+    const { app } = window.netnote;
+    const m = app.minimap.group.position;
+    const h = window.IWER_DEVICE.hands.left.position;
+    return { visible: app.minimap.visible, gap: Math.hypot(m.x - h.x, m.z - h.z), above: m.y - h.y };
+  });
+  check('turning the left palm up brings the map onto it', !before && shown.visible && shown.gap < 0.12, JSON.stringify(shown));
+  // zoom: drag the knob on the rail all the way up with the right hand's ray
+  const zoom = await page.evaluate(async () => {
+    const { app } = window.netnote;
+    const c = app.minimap.controlsGroup;
+    const V = c.position.constructor;
+    const Q = c.quaternion.constructor;
+    const s0 = app.graph.root.scale.x;
+    const hand = window.IWER_DEVICE.hands.right;
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    // aim the hand's real ray (which need not leave along the hand's own axis) at a point on the rail
+    const ray = window.netnote.world.player.raySpaces.right;
+    const aimAt = async (y) => {
+      c.updateMatrixWorld();
+      const target = c.localToWorld(new V(0, y, 0));
+      hand.position.set(0.2, 1.3, -0.1);
+      for (let i = 0; i < 4; i++) {
+        await wait(60);
+        ray.updateMatrixWorld();
+        const o = new V().setFromMatrixPosition(ray.matrixWorld);
+        const dir = new V(0, 0, -1).applyQuaternion(ray.getWorldQuaternion(new Q()));
+        const fix = new Q().setFromUnitVectors(dir, target.clone().sub(o).normalize());
+        const hq = hand.quaternion;
+        const q = fix.multiply(new Q(hq.x, hq.y, hq.z, hq.w));
+        hand.quaternion.set(q.x, q.y, q.z, q.w);
+      }
+    };
+    await aimAt(0);
+    await wait(200);
+    hand.updatePinchValue(1);
+    await wait(250);
+    for (let i = 1; i <= 6; i++) {
+      await aimAt(i * 0.012);
+    }
+    const mid = app.graph.root.scale.x;
+    hand.updatePinchValue(0);
+    await wait(300);
+    return { s0, s1: mid, level: app.minimap.zoomLevel };
+  });
+  check(
+    'sliding the zoom rail up enlarges the big graph to match',
+    zoom.s1 > zoom.s0 * 1.3,
+    `${zoom.s0.toFixed(4)} → ${zoom.s1.toFixed(4)}, knob ${zoom.level.toFixed(2)}`,
+  );
+  await palm(false);
+  await page.waitForTimeout(1200);
+  check('turning the palm back puts the map away', !(await page.evaluate(() => window.netnote.app.minimap.visible)));
+  check('no page errors (hands)', errors.length === 0, errors[0]);
+  await ctx.close();
+}
+
 async function explore(browser) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: true });
   const page = await ctx.newPage();
@@ -698,6 +839,7 @@ try {
   await editing(browser);
   await explore(browser);
   await mixedReality(browser);
+  await handsDirect(browser);
 } catch (e) {
   check('scenario ran to the end', false, e instanceof Error ? e.message : String(e));
 } finally {

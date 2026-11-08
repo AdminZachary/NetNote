@@ -54,6 +54,8 @@ export class TextInput {
   /** Enter (without Shift) and Escape on a physical keyboard. */
   onSubmit: (() => void) | null = null;
   onCancel: (() => void) | null = null;
+  /** Any key or text arriving (a hardware, Bluetooth or surface keyboard, or the virtual one). */
+  onTyped: (() => void) | null = null;
   multiline = true;
 
   constructor(private env: KeyboardEnv) {
@@ -78,6 +80,7 @@ export class TextInput {
     });
     doc.body.appendChild(this.field);
     this.field.addEventListener('input', (e) => {
+      this.onTyped?.();
       const fixed = repairReplace(this.state.text, this.state.caret, this.field.value, (e as InputEvent).data ?? null);
       if (fixed) {
         this.field.value = fixed.text;
@@ -127,10 +130,11 @@ export class TextInput {
     this.state = { text: initial, caret: initial.length, keyboardOpen: false };
     this.onKey = (e: KeyboardEvent): void => {
       if (!this.active || this.env.document.activeElement !== this.field) return;
+      this.onTyped?.();
       if (e.key === 'Escape') {
         e.preventDefault();
         this.onCancel?.();
-      } else if (e.key === 'Enter' && (!this.multiline || e.metaKey || e.ctrlKey)) {
+      } else if ((e.key === 'Enter' && (!this.multiline || e.metaKey || e.ctrlKey)) || (e.key.toLowerCase() === 's' && (e.metaKey || e.ctrlKey))) {
         e.preventDefault();
         this.onSubmit?.();
       }

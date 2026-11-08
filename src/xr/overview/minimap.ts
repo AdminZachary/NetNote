@@ -5,7 +5,11 @@
  *   - point at a star on it and pinch: the big graph turns that note round to face you;
  *   - grab the glowing bezel ring and drag: the map turns freely like a ball in your hand, and the
  *     big graph turns with it (a tick on the bezel every 15° you turn, felt and heard).
+ *   - slide the knob on the zoom rail beside it: the big graph grows or shrinks to match (the knob
+ *     always shows how far in you are, between the furthest and the closest view).
  * The projector base under it stays level and keeps north, so you never lose your bearings.
+ * With hand tracking it rests on your left palm: turn the palm towards you and it appears there.
+ * Pinch at it to use it (the ray from your right hand), even from just a few centimetres away.
  */
 import {
   BufferAttribute,
@@ -31,12 +35,15 @@ import {
   CylinderGeometry,
   AdditiveBlending,
   DoubleSide,
+  Plane,
 } from '@iwsdk/core';
 import type { XRPointerEvent } from '../ui/surface';
 import { dragRotation, grabPoint } from '../interaction/turn';
 
 /** metres: the graph's radius in your hand */
 export const MINI_R = 0.075;
+/** metres: length of the zoom rail */
+const RAIL_H = MINI_R * 1.6;
 const PICK_R = 0.008;
 
 function dotTexture(): CanvasTexture {
@@ -86,6 +93,15 @@ export class MiniMap {
   private readonly base = new Group();
   private readonly baseMats: (LineBasicMaterial | MeshBasicMaterial)[] = [];
   private drag: { pointerId: number; last: Vector3; turned: number } | null = null;
+  /** the zoom rail: stays upright and faces you, to the right of the ball */
+  private readonly controls = new Group();
+  private readonly knob: Mesh<SphereGeometry, MeshBasicMaterial>;
+  private readonly railMats: LineBasicMaterial[] = [];
+  private zoomDrag: { pointerId: number } | null = null;
+  /** 0 (furthest view) .. 1 (closest view): where the knob sits */
+  zoomLevel = 0.5;
+  /** the knob was moved to `level` (0..1): zoom the big graph to match */
+  onZoom: ((level: number) => void) | null = null;
   /** world pose of the map last frame (for the grab maths) */
   private readonly worldCentre = new Vector3();
 
@@ -174,7 +190,31 @@ export class MiniMap {
     this.base.add(baseLines, beam);
     this.baseMats.push(dm, beam.material);
     this.base.visible = false;
+
+    // the zoom rail: a short upright track with + at the top and − at the bottom, and a knob on it
+    const H = RAIL_H;
+    const rail: number[] = [0, -H / 2, 0, 0, H / 2, 0];
+    for (let i = 0; i <= 8; i++) rail.push(-0.003, -H / 2 + (i * H) / 8, 0, 0.003, -H / 2 + (i * H) / 8, 0);
+    const plus = 0.006;
+    rail.push(-plus, H / 2 + 0.014, 0, plus, H / 2 + 0.014, 0, 0, H / 2 + 0.014 - plus, 0, 0, H / 2 + 0.014 + plus, 0);
+    rail.push(-plus, -H / 2 - 0.014, 0, plus, -H / 2 - 0.014, 0);
+    const railGeo = new BufferGeometry();
+    railGeo.setAttribute('position', new BufferAttribute(new Float32Array(rail), 3));
+    const railMat = new LineBasicMaterial({ color: 0x9fe9ff, transparent: true, opacity: 0, depthWrite: false });
+    this.railMats.push(railMat);
+    const railLines = new LineSegments(railGeo, railMat);
+    railLines.raycast = () => undefined;
+    railLines.renderOrder = 12;
+    this.knob = new Mesh(new SphereGeometry(0.0065, 16, 12), new MeshBasicMaterial({ color: 0x5ee7ff, transparent: true, opacity: 0, depthWrite: false }));
+    this.knob.renderOrder = 13;
+    this.knob.raycast = () => undefined;
+    const railHit = new Mesh(new CylinderGeometry(0.014, 0.014, H + 0.04, 8), new MeshBasicMaterial({ visible: false }));
+    railHit.name = 'minimap-zoom';
+    this.controls.add(railLines, this.knob, railHit);
+    this.controls.name = 'minimap-controls';
+    this.controls.visible = false;
     this.bind();
+    this.bindZoom();
   }
 
   /** The level base lives outside the rotating ball: add it to the scene next to `group`. */
@@ -182,8 +222,76 @@ export class MiniMap {
     return this.base;
   }
 
+  /** The zoom rail lives outside the rotating ball too: add it to the scene and make it interactive. */
+  get controlsGroup(): Group {
+    return this.controls;
+  }
+
+  get zooming(): boolean {
+    return !!this.zoomDrag;
+  }
+
   get turning(): boolean {
-    return !!this.drag;
+    return !!this.drag || !!this.zoomDrag;
+  }
+
+  private bindZoom(): void {
+    const g = this.controls as unknown as {
+      addEventListener(t: string, f: (e: XRPointerEvent) => void): void;
+      setPointerCapture(id: number): void;
+      releasePointerCapture(id: number): void;
+    };
+    // where along the rail the pointer is: the fingertip itself, or where the ray meets the rail's plane
+    const levelOf = (e: XRPointerEvent): number | null => {
+      let p: Vector3 | null = null;
+      if (isTouch(e) && e.point) p = new Vector3(e.point.x, e.point.y, e.point.z);
+      else {
+        const q = e.pointerQuaternion;
+        const o = new Vector3(e.pointerPosition.x, e.pointerPosition.y, e.pointerPosition.z);
+        const d = new Vector3(0, 0, -1).applyQuaternion(new Quaternion(q.x, q.y, q.z, q.w));
+        this.controls.updateMatrixWorld();
+        const n = new Vector3(0, 0, 1).applyQuaternion(this.controls.getWorldQuaternion(new Quaternion()));
+        const plane = new Plane().setFromNormalAndCoplanarPoint(n, this.controls.getWorldPosition(new Vector3()));
+        const denom = n.dot(d);
+        if (Math.abs(denom) < 1e-4) return null;
+        const t = -plane.distanceToPoint(o) / denom;
+        if (t < 0) return null;
+        p = o.addScaledVector(d, t);
+      }
+      const local = this.controls.worldToLocal(p);
+      return Math.max(0, Math.min(1, local.y / RAIL_H + 0.5));
+    };
+    g.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      if (this.opacity < 0.6) return;
+      this.zoomDrag = { pointerId: e.pointerId };
+      g.setPointerCapture(e.pointerId);
+      const l = levelOf(e);
+      if (l !== null) this.setZoom(l);
+      this.onTurnTick?.();
+    });
+    g.addEventListener('pointermove', (e) => {
+      if (this.zoomDrag?.pointerId !== e.pointerId) return;
+      const l = levelOf(e);
+      if (l !== null) this.setZoom(l);
+    });
+    g.addEventListener('pointerup', (e) => {
+      e.stopPropagation();
+      if (this.zoomDrag?.pointerId !== e.pointerId) return;
+      g.releasePointerCapture(e.pointerId);
+      this.zoomDrag = null;
+    });
+  }
+
+  private lastTick = 0.5;
+  private setZoom(level: number): void {
+    if (Math.abs(level - this.zoomLevel) < 1e-4) return;
+    this.zoomLevel = level;
+    this.onZoom?.(level);
+    if (Math.abs(level - this.lastTick) >= 0.125) {
+      this.lastTick = level;
+      this.onTurnTick?.();
+    }
   }
 
   private bind(): void {
@@ -197,6 +305,7 @@ export class MiniMap {
       };
     };
     const held = (e: XRPointerEvent): Vector3 => {
+      if (isTouch(e) && e.point) return new Vector3(e.point.x, e.point.y, e.point.z).sub(this.worldCentre);
       const { o, d } = ray(e);
       return grabPoint(o, d, this.worldCentre, MINI_R * 1.2 * this.group.scale.x).sub(this.worldCentre);
     };
@@ -281,13 +390,24 @@ export class MiniMap {
   }
 
   /** anchor: world position above the hand; quat: the big graph's orientation; headLocal: head in layout units. */
-  place(dt: number, anchor: Vector3, quat: Quaternion, focusId: string | null, headLocal: Vector3, headFwd: Vector3): void {
+  place(
+    dt: number,
+    anchor: Vector3,
+    quat: Quaternion,
+    focusId: string | null,
+    headLocal: Vector3,
+    headFwd: Vector3,
+    eye: Vector3 = anchor.clone().addScaledVector(headFwd, -0.4),
+    baseAt: Vector3 | null = null,
+  ): void {
     this.opacity += (this.target - this.opacity) * Math.min(1, dt * 6);
     this.group.visible = this.opacity > 0.02;
     this.base.visible = this.group.visible;
+    this.controls.visible = this.group.visible;
     if (!this.group.visible) {
       this.setHover(null);
       this.drag = null;
+      this.zoomDrag = null;
       return;
     }
     // while you turn it, the ball stays where you grabbed it (it does not chase your other hand)
@@ -295,8 +415,21 @@ export class MiniMap {
     this.group.quaternion.copy(quat);
     this.group.updateMatrixWorld(true);
     this.worldCentre.copy(this.group.position);
-    this.base.position.copy(this.group.position).setY(this.group.position.y - MINI_R * 1.35);
+    // the base sits under the ball, or in your palm when the map rests on it
+    if (baseAt) this.base.position.copy(baseAt);
+    else this.base.position.copy(this.group.position).setY(this.group.position.y - MINI_R * 1.35);
     this.base.quaternion.identity();
+    // the zoom rail: upright, facing you, just right of the ball (as you see it)
+    const toEye = eye.clone().sub(this.group.position).setY(0);
+    if (toEye.lengthSq() < 1e-6) toEye.set(0, 0, 1);
+    toEye.normalize();
+    const right = new Vector3().crossVectors(new Vector3(0, 1, 0), toEye).normalize();
+    if (!this.zoomDrag) this.controls.position.copy(this.group.position).addScaledVector(right, MINI_R * 1.55);
+    this.controls.quaternion.setFromUnitVectors(new Vector3(0, 0, 1), toEye);
+    this.knob.position.set(0, (this.zoomLevel - 0.5) * RAIL_H, 0);
+    this.knob.material.opacity = (this.zoomDrag ? 1 : 0.85) * this.opacity;
+    this.knob.scale.setScalar(this.zoomDrag ? 1.3 : 1);
+    for (const m of this.railMats) m.opacity = (this.zoomDrag ? 0.9 : 0.55) * this.opacity;
     const glow = this.drag ? 1 : this.hovered ? 0.8 : 0.6;
     this.mat.opacity = this.opacity;
     this.shell.material.opacity = 0.35 * this.opacity;
@@ -325,4 +458,8 @@ export class MiniMap {
   get visible(): boolean {
     return this.group.visible;
   }
+}
+
+function isTouch(e: XRPointerEvent): boolean {
+  return e.pointerType === 'touch';
 }

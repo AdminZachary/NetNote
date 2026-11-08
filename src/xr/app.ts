@@ -56,7 +56,8 @@ import { Dock, type DockAction } from './ui/dock';
 import { Hint } from './ui/hint';
 import { NoteCard } from './ui/note-card';
 import { SearchPanel } from './ui/search-panel';
-import type { Surface, XRPointerEvent } from './ui/surface';
+import { Surface, type XRPointerEvent } from './ui/surface';
+import { PalmUp, palmFacing, palmPose, type PalmPose } from './interaction/palm';
 import type { ClusterInfo } from '../core/insights/cluster';
 import { sanitizeSavedWall, WALL_AZ, WALL_R, WALL_SCALE, WallGeometry, type SavedWallCard, type WallSpot } from './wall/wall-geometry';
 import { WallView, type Ribbon } from './wall/wall-view';
@@ -201,6 +202,12 @@ export class NetNoteApp {
     private readonly opts: AppOptions = {},
   ) {
     this.input = new TextInput({ document, session: () => world.session });
+    // typing (on any keyboard, including a surface keyboard on the desk): hands rest, nothing gets pressed
+    this.input.onTyped = () => (Surface.quietUntil = performance.now() + 500);
+    // a fingertip press on a panel button: a soft click where you touched it (hands have no motor)
+    Surface.onPress = (_s, kind, at) => {
+      if (kind === 'touch') this.sound.play('select', at, null);
+    };
     this.manip = new RoomManipulator(this.graph.root);
     this.manip.onManipulate = () => this.tourDone('move');
 
@@ -223,7 +230,11 @@ export class NetNoteApp {
     this.register(this.catcher, false);
     this.register(this.graph.root, false);
     for (const s of [this.dock, this.composer, this.search, this.insightsPanel]) this.register(s.mesh, true);
+    // the hand map is worked by pinching at it (ray), never by touch: a fingertip hovering near it
+    // would otherwise take over from the pinch you are using to turn or zoom it
     this.register(this.minimap.group, false);
+    this.register(this.minimap.controlsGroup, false);
+    this.minimap.onZoom = (level) => this.zoomGraphTo(level);
     this.insightsPanel.mesh.visible = false;
     this.insightsPanel.onAction = (id, data) => this.onInsights(id, data);
     this.minimap.onPick = (id) => this.jumpTo(id);
@@ -485,6 +496,7 @@ export class NetNoteApp {
     if (this.editor.mesh.visible) this.editor.tick(dt);
     this.updateConnect();
     this.updatePanelDrag();
+    this.updateTouchReach();
     this.updateWall(dt);
     this.updateOverview(dt, eye, quat);
     this.lookForRoom(eye, quat);
@@ -524,7 +536,10 @@ export class NetNoteApp {
     else if (Math.abs(angleDiff(yaw, this.dockYaw)) > (28 * Math.PI) / 180) this.dockYaw += angleDiff(yaw, this.dockYaw) * 0.08;
     // desktop preview: the window is narrower than a headset view, keep the dock just inside it
     const pitch = ((this.immersive ? this.shelf.dockPitch : -17) * Math.PI) / 180;
-    const r = this.immersive ? 0.55 : 0.95;
+    // with hands the menu comes within a fingertip's reach (an easy forward reach, 0.5 m from the eyes),
+    // but no closer, or it would sit in the path of a hand pointing at the graph;
+    // with controllers it stays a little further out, for the ray
+    const r = this.immersive ? (this.handsActive() ? 0.5 : 0.55) : 0.95;
     const target = new Vector3(-Math.sin(this.dockYaw) * Math.cos(pitch) * r, Math.sin(pitch) * r, -Math.cos(this.dockYaw) * Math.cos(pitch) * r).add(eye);
     if (snap) this.dock.mesh.position.copy(target);
     else this.dock.mesh.position.lerp(target, 0.12);
@@ -554,7 +569,7 @@ export class NetNoteApp {
     on('pointerleave', () => this.graph.setHovered(null));
     on('pointerdown', (e) => {
       const id = idOf(e);
-      if (!id) return;
+      if (!id || Surface.quiet(e)) return;
       e.stopPropagation();
       this.stopAutoTour();
       this.turn = null; // a star you grab stays where it is
@@ -614,6 +629,7 @@ export class NetNoteApp {
     };
     let mouse: { id: number; x: number; y: number } | null = null;
     on('pointerdown', (e) => {
+      if (Surface.quiet(e)) return;
       this.stopAutoTour();
       this.catcher.setPointerCapture(e.pointerId);
       if (isScreenPointer(e)) {
@@ -1506,13 +1522,29 @@ export class NetNoteApp {
     this.territories.target = this.writing ? 0.3 : 1;
     this.territories.maxElevationDeg = this.immersive ? 18 : 9;
     this.territories.update(dt, eye);
-    // above your left hand when it is tracked, else beside the menu
+    // on your left palm when you turn it towards you; else (shown from the menu) above the left
+    // controller, or beside the menu
     const fwd = FORWARD.clone().applyQuaternion(quat).setY(0);
     if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1);
     fwd.normalize();
     const anchor = new Vector3();
-    const left = this.immersive ? this.leftHand() : null;
-    if (left) anchor.copy(left).setY(left.y + 0.13);
+    const palm = this.immersive ? this.leftPalm() : null;
+    const palmUp = this.palmUp.update(palm ? palmFacing(palm, eye) : null, dt);
+    if (palmUp !== this.wasPalmUp) {
+      this.wasPalmUp = palmUp;
+      if (palm) this.sound.play(palmUp ? 'open' : 'close', palm.centre, null);
+    }
+    this.minimap.target = palmUp || this.mapPinned ? 1 : 0;
+    let baseAt: Vector3 | null = null;
+    const left = this.immersive && !palm ? this.leftHand() : null;
+    if (palmUp && palm) {
+      // the ball floats just above the middle of the palm, the projector base rests in it
+      anchor.copy(palm.centre).addScaledVector(palm.normal, MINI_R * 1.3);
+      baseAt = palm.centre.clone().addScaledVector(palm.normal, 0.012);
+      this.palmAnchor = anchor.clone();
+    } else if (palm && this.minimap.visible && this.palmAnchor && !this.mapPinned) {
+      anchor.copy(this.palmAnchor); // fading out where it was, not jumping away
+    } else if (left) anchor.copy(left).setY(left.y + 0.13);
     else {
       const side = new Vector3().crossVectors(fwd, new Vector3(0, 1, 0)).normalize();
       anchor
@@ -1522,7 +1554,97 @@ export class NetNoteApp {
     }
     this.graph.root.updateMatrixWorld();
     const headLocal = eye.clone().applyMatrix4(this.graph.root.matrixWorld.clone().invert());
-    this.minimap.place(dt, anchor, this.graph.root.quaternion, this.graph.selected, headLocal, fwd);
+    if (!this.minimap.zooming) this.minimap.zoomLevel = this.zoomLevelOf(this.graph.root.scale.x);
+    this.minimap.place(dt, anchor, this.graph.root.quaternion, this.graph.selected, headLocal, fwd, eye, baseAt);
+  }
+
+  private mapPinned = false;
+  private readonly palmUp = new PalmUp();
+  private wasPalmUp = false;
+  private palmAnchor: Vector3 | null = null;
+
+  /** The left palm (centre and facing) from the tracked hand joints, or null without a left hand. */
+  private leftPalm(): PalmPose | null {
+    const session = this.world.session;
+    const src = session ? [...session.inputSources].find((s) => s.handedness === 'left' && s.hand) : undefined;
+    const xr = this.world.renderer.xr;
+    const frame = xr.getFrame?.() as XRFrame | null | undefined;
+    const ref = xr.getReferenceSpace();
+    if (!src?.hand || !frame?.getJointPose || !ref) return null;
+    this.world.player.updateMatrixWorld();
+    const origin = this.world.player.matrixWorld;
+    const joint = (name: XRHandJoint): Vector3 | null => {
+      const space = src.hand!.get(name);
+      const pose = space ? frame.getJointPose!(space, ref) : undefined;
+      if (!pose) return null;
+      const p = pose.transform.position;
+      return new Vector3(p.x, p.y, p.z).applyMatrix4(origin);
+    };
+    const w = joint('wrist');
+    const i = joint('index-finger-metacarpal');
+    const k = joint('pinky-finger-metacarpal');
+    const m = joint('middle-finger-phalanx-proximal');
+    if (!w || !i || !k || !m) return null;
+    return palmPose(w, i, k, m, 'left');
+  }
+
+  /** 0 (furthest view) .. 1 (closest view) for a graph scale, on a log scale between the limits. */
+  private zoomLevelOf(scale: number): number {
+    const { minScale: lo, maxScale: hi } = this.manip;
+    return Math.max(0, Math.min(1, Math.log(scale / lo) / Math.log(hi / lo)));
+  }
+
+  /** The zoom rail on the hand map: scale the big graph about the note you are on (or its centre). */
+  private zoomGraphTo(level: number): void {
+    const { minScale: lo, maxScale: hi } = this.manip;
+    const want = lo * (hi / lo) ** level;
+    const root = this.graph.root;
+    root.updateMatrixWorld();
+    const pivot = (this.graph.selected ? this.graph.worldPos(this.graph.selected) : null) ?? this.graphCentreWorld();
+    const k = want / root.scale.x;
+    if (!Number.isFinite(k) || Math.abs(k - 1) < 1e-5) return;
+    this.turn = null;
+    this.glide = null;
+    this.manip.cancel();
+    root.position.sub(pivot).multiplyScalar(k).add(pivot);
+    root.scale.setScalar(want);
+    root.updateMatrixWorld();
+  }
+
+  private touchOn = { left: true, right: true };
+
+  /**
+   * Fingertip touch only wakes up when a fingertip is right at a panel (a few cm in front of it).
+   * Left to itself the touch pointer claims the hand from 15 cm away, and a hand pointing at the
+   * graph from near the menu would lose its ray.
+   */
+  private updateTouchReach(): void {
+    const input = (
+      this.world as unknown as { input?: { xr?: { multiPointers?: Record<'left' | 'right', { toggleSubPointer(k: string, on: boolean): boolean }> } } }
+    ).input;
+    const mp = input?.xr?.multiPointers;
+    if (!mp || !this.immersive) return;
+    const panels = [this.dock, this.tools, this.composer, this.editor, this.search, this.insightsPanel, this.companion.bubble].filter((p) => p.mesh.visible);
+    for (const h of ['left', 'right'] as const) {
+      const tipObj = this.world.player.indexTipSpaces[h];
+      tipObj.updateMatrixWorld();
+      const tip = new Vector3().setFromMatrixPosition(tipObj.matrixWorld);
+      const wasOn = this.touchOn[h];
+      const near = panels.some((p) => {
+        const l = p.mesh.worldToLocal(tip.clone());
+        const margin = wasOn ? 0.05 : 0.03;
+        const inside = Math.abs(l.x) < p.widthM / 2 + margin && Math.abs(l.y) < p.heightM / 2 + margin;
+        return inside && l.z < (wasOn ? 0.09 : 0.06) && l.z > -0.08;
+      });
+      this.touchOn[h] = near;
+      mp[h].toggleSubPointer('touch', near); // a no-op unless it changes
+    }
+  }
+
+  /** Are hands (not controllers) being tracked? */
+  private handsActive(): boolean {
+    const session = this.world.session;
+    return !!session && [...session.inputSources].some((s) => !!s.hand);
   }
 
   /** World position of the left hand / controller grip, or null when it is not tracked. */
@@ -1680,8 +1802,9 @@ export class NetNoteApp {
         else this.openInsights();
         break;
       case 'map':
-        this.minimap.target = this.minimap.target > 0 ? 0 : 1;
-        this.dock.setActive('map', this.minimap.target > 0);
+        this.mapPinned = !this.mapPinned;
+        this.minimap.target = this.mapPinned ? 1 : 0;
+        this.dock.setActive('map', this.mapPinned);
         break;
       case 'wall': {
         // put the card you are reading on the wall (or just show where the wall is)

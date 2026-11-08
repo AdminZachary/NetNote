@@ -56,6 +56,20 @@ function keepLoopAlive(world: World): void {
   };
 }
 
+/**
+ * Crisp everywhere you look: three.js asks the headset for maximum foveation by default (only the
+ * middle of the view at full resolution), and the browser's default framebuffer is below the Quest 3
+ * panel. Text is the whole point of this app, so: no foveation, and a framebuffer at panel resolution.
+ * The scene is light (points, lines and a few canvas panels), so the headset keeps its frame rate.
+ */
+function sharpen(world: World): void {
+  const xr = world.renderer.xr;
+  xr.setFoveation(0);
+  xr.setFramebufferScaleFactor(1.25);
+  // some runtimes reset foveation when the session starts: set it again then
+  xr.addEventListener('sessionstart', () => xr.setFoveation(0));
+}
+
 async function xrSupport(): Promise<{ vr: boolean; ar: boolean }> {
   const xr = navigator.xr;
   if (!xr) return { vr: false, ar: false };
@@ -71,6 +85,7 @@ async function main(): Promise<void> {
   const world = await World.create(container, projectOptions);
   world.registerSystem(NetNoteSystem);
   keepLoopAlive(world);
+  sharpen(world);
 
   const library = new Library(await IdbStore.open());
   const sample = sampleFiles(import.meta.glob<string>('/sample-vault/**/*.{md,canvas}', { query: '?raw', import: 'default', eager: true }));
