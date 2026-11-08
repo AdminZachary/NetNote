@@ -355,6 +355,7 @@ async function mixedReality(browser) {
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => m.text().includes('frame error') && errors.push(m.text()));
   await ready(page);
   await page.evaluate(() => {
     const pt = (x, z) => new DOMPointReadOnly(x, 0, z, 1);
@@ -418,6 +419,62 @@ async function mixedReality(browser) {
     'the thinking wall is fitted to the real wall on the left',
     !!r.wall && Math.abs(r.radius - 1.42) < 0.05,
     r.wall ? `ring ${r.radius.toFixed(2)} m` : 'no wall',
+  );
+
+  // tap a star, then tap the card's × with the hand ray, several times: the loop must keep running
+  await page.evaluate(() => {
+    window.IWER_DEVICE.controlMode = 'programmatic';
+    window.IWER_DEVICE.primaryInputMode = 'hand';
+    const app = window.netnote.app;
+    window.__frames = 0;
+    const u = app.update.bind(app);
+    app.update = (dt) => {
+      window.__frames++;
+      u(dt);
+    };
+  });
+  const ids = await page.evaluate(() =>
+    window.netnote.app.graph.nodes
+      .filter((n) => !n.ghost && !n.file)
+      .map((n) => n.id)
+      .slice(0, 5),
+  );
+  let closed = 0;
+  let stalled = false;
+  for (const id of ids) {
+    await page.evaluate((id) => window.netnote.app.select(id), id);
+    await page.waitForFunction(() => !window.netnote.app.turn, null, { timeout: 5000 }).catch(() => undefined);
+    await page.evaluate(() => {
+      const { app } = window.netnote;
+      const c = app.cards[0];
+      c.repaint();
+      const r = c.regionCenter('close');
+      const V = c.mesh.position.constructor;
+      const Q = c.mesh.quaternion.constructor;
+      const target = c.mesh.localToWorld(new V((r.x / c.pxW - 0.5) * c.widthM, (0.5 - r.y / c.pxH) * c.heightM, 0.002));
+      const hand = window.IWER_DEVICE.hands.right;
+      const from = new V(0.15, 1.35, -0.25);
+      hand.position.set(from.x, from.y, from.z);
+      const q = new Q().setFromUnitVectors(new V(0, 0, -1), target.clone().sub(from).normalize());
+      hand.quaternion.set(q.x, q.y, q.z, q.w);
+    });
+    await page.waitForTimeout(200);
+    const f0 = await page.evaluate(() => window.__frames);
+    await pinch(page, 1);
+    await page.waitForTimeout(250);
+    await pinch(page, 0);
+    await page.waitForTimeout(600);
+    const f1 = await page.evaluate(() => window.__frames);
+    if (f1 - f0 < 3) {
+      stalled = true;
+      break;
+    }
+    if ((await state(page)).cards.length === 0) closed++;
+  }
+  check(
+    'tapping × on a card closes it, again and again, without freezing (mixed reality)',
+    closed === ids.length && !stalled,
+    `${closed}/${ids.length} closed${stalled ? ', render loop stopped' : ''}`,
   );
   check('no page errors (mixed reality)', errors.length === 0, errors[0]);
   await ctx.close();
@@ -537,6 +594,25 @@ async function explore(browser) {
     return { open: e.mesh.visible, blocks: e.model.blocks.length };
   });
   check('"Edit" opens the note block by block', ed.open && ed.blocks >= 2, `${ed.blocks} blocks`);
+  // the cursor: pinch inside the text to put it there, then type — the words go in at that spot
+  await app(() => {
+    const a = window.netnote.app;
+    const e = a.editor;
+    e.repaint();
+    const b = e.regionCenter('block', '1');
+    e.clickAt(b.x, b.y);
+    a.input.setText('Walking clears the head.');
+    e.repaint();
+    const y = 146 + 38; // the first line of the text box
+    let x = 60;
+    while (x < 600 && e.caretAtPoint({ x, y }) !== 'Walking'.length) x += 2;
+    e.clickAt(x, y);
+  });
+  await page.waitForTimeout(150);
+  await page.keyboard.type(' often');
+  await page.waitForTimeout(150);
+  const cur = await app(() => ({ text: window.netnote.app.input.text, caret: window.netnote.app.input.caret }));
+  check('pinching inside the text moves the cursor there, and typing inserts at it', cur.text === 'Walking often clears the head.', JSON.stringify(cur));
   const edited = await app(async () => {
     const a = window.netnote.app;
     const e = a.editor;

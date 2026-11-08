@@ -40,6 +40,22 @@ class NetNoteSystem extends createSystem({}) {
   }
 }
 
+/**
+ * An error thrown anywhere inside a frame would stop the render loop for good (the next frame is only
+ * requested after this one returns), which in a headset looks like a frozen app. Log it and carry on.
+ */
+function keepLoopAlive(world: World): void {
+  const step = world.update.bind(world);
+  let reported = 0;
+  world.update = (delta: number, time: number): void => {
+    try {
+      step(delta, time);
+    } catch (err) {
+      if (reported++ < 5) console.error('frame error (recovered)', err);
+    }
+  };
+}
+
 async function xrSupport(): Promise<{ vr: boolean; ar: boolean }> {
   const xr = navigator.xr;
   if (!xr) return { vr: false, ar: false };
@@ -54,6 +70,7 @@ async function main(): Promise<void> {
   const container = document.getElementById('scene-container') as HTMLDivElement;
   const world = await World.create(container, projectOptions);
   world.registerSystem(NetNoteSystem);
+  keepLoopAlive(world);
 
   const library = new Library(await IdbStore.open());
   const sample = sampleFiles(import.meta.glob<string>('/sample-vault/**/*.{md,canvas}', { query: '?raw', import: 'default', eager: true }));

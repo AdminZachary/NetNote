@@ -33,9 +33,9 @@ export function fit(ctx: Ctx, text: string, maxWidth: number): string {
 
 const CJK = '\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef';
 /** One CJK character, or a latin word with the spaces after it, or a run of spaces. */
-const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+\\s*|\\s+`, 'g');
+export const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+\\s*|\\s+`, 'g');
 
-type Measure = Pick<Ctx, 'measureText'>;
+export type Measure = Pick<Ctx, 'measureText'>;
 
 /** Word wrap that breaks between latin words and between any two CJK characters. */
 export function wrap(ctx: Measure, text: string, maxWidth: number, maxLines = Infinity): string[] {

@@ -2,20 +2,20 @@
  * Text entry through the Meta Quest system keyboard (WebXR), with the same code path for a Bluetooth
  * keyboard, voice dictation (the keyboard's mic key) and a desktop keyboard.
  *
- * How the Quest browser does it (developers.meta.com/horizon/documentation/web/webxr-keyboard):
- *   - `session.isSystemKeyboardSupported` tells whether the overlay keyboard exists;
- *   - focusing any DOM text field opens it; the session turns `visible-blurred` while it is up;
- *   - there are no key events, only the field's `value` (read it on `input`);
- *   - every time the keyboard opens, the first key press replaces the field's value.
- * So each keyboard session starts on an empty field and we append what was typed to our own buffer:
- * closing the keyboard half-way and opening it again never loses text.
+ * How it works: the text being written lives in a real (invisible) text field. Focusing it opens the
+ * Quest overlay keyboard, which shows the whole text with its own cursor: you can move the cursor
+ * anywhere and insert, delete or select there. We read the field's value and cursor on every change
+ * and draw them on our panel, so what you see in the room matches the keyboard.
+ *
+ * Safety net: some keyboard builds replace the whole value with the first key pressed. If a single
+ * keystroke wipes out a longer text, we put the text back and add the keystroke at the cursor, so
+ * nothing written is ever lost.
  */
 
 export interface TextSessionState {
-  /** text committed in earlier keyboard sessions */
-  committed: string;
-  /** what the field holds right now */
-  live: string;
+  text: string;
+  /** cursor position in `text` */
+  caret: number;
   keyboardOpen: boolean;
 }
 
@@ -27,12 +27,30 @@ export interface KeyboardEnv {
   session: () => XRSession | undefined;
 }
 
+/**
+ * Did one keystroke replace a whole text instead of editing it? (`prev` → `next` with `data` typed.)
+ * Returns the repaired text and cursor, or null when the edit looks normal.
+ */
+export function repairReplace(prev: string, prevCaret: number, next: string, data: string | null): { text: string; caret: number } | null {
+  if (!data || prev.length < 3) return null;
+  if (next !== data || next.length >= prev.length) return null;
+  const at = Math.max(0, Math.min(prev.length, prevCaret));
+  return { text: prev.slice(0, at) + data + prev.slice(at), caret: at + data.length };
+}
+
+/** Remove the word (and spaces) just before the cursor. */
+export function deleteWordBefore(text: string, caret: number): { text: string; caret: number } {
+  const head = text.slice(0, caret).replace(/(\s*\S+|\s+)$/u, '');
+  return { text: head + text.slice(caret), caret: head.length };
+}
+
 export class TextInput {
   private field: HTMLTextAreaElement;
-  private state: TextSessionState = { committed: '', live: '', keyboardOpen: false };
+  private state: TextSessionState = { text: '', caret: 0, keyboardOpen: false };
   private listener: TextListener | null = null;
   private active = false;
   private onKey: ((e: KeyboardEvent) => void) | null = null;
+  private onSelection: (() => void) | null = null;
   /** Enter (without Shift) and Escape on a physical keyboard. */
   onSubmit: (() => void) | null = null;
   onCancel: (() => void) | null = null;
@@ -59,11 +77,18 @@ export class TextInput {
       pointerEvents: 'none',
     });
     doc.body.appendChild(this.field);
-    this.field.addEventListener('input', () => {
-      this.state.live = this.field.value;
+    this.field.addEventListener('input', (e) => {
+      const fixed = repairReplace(this.state.text, this.state.caret, this.field.value, (e as InputEvent).data ?? null);
+      if (fixed) {
+        this.field.value = fixed.text;
+        this.field.setSelectionRange(fixed.caret, fixed.caret);
+      }
+      this.sync();
+    });
+    this.field.addEventListener('blur', () => {
+      this.state.keyboardOpen = false;
       this.emit();
     });
-    this.field.addEventListener('blur', () => this.commitLive(false));
     this.field.addEventListener('focus', () => {
       this.state.keyboardOpen = true;
       this.emit();
@@ -71,7 +96,11 @@ export class TextInput {
   }
 
   get text(): string {
-    return join(this.state.committed, this.state.live);
+    return this.state.text;
+  }
+
+  get caret(): number {
+    return this.state.caret;
   }
 
   get isActive(): boolean {
@@ -93,9 +122,9 @@ export class TextInput {
     this.end();
     this.active = true;
     this.multiline = multiline;
-    this.state = { committed: initial, live: '', keyboardOpen: false };
     this.listener = listener;
-    this.field.value = '';
+    this.field.value = initial;
+    this.state = { text: initial, caret: initial.length, keyboardOpen: false };
     this.onKey = (e: KeyboardEvent): void => {
       if (!this.active || this.env.document.activeElement !== this.field) return;
       if (e.key === 'Escape') {
@@ -106,25 +135,33 @@ export class TextInput {
         this.onSubmit?.();
       }
     };
+    // the cursor moves without an input event (arrow keys, the keyboard's cursor, a tap in its text)
+    this.onSelection = (): void => {
+      if (this.active && this.env.document.activeElement === this.field && this.field.selectionStart !== this.state.caret) this.sync();
+    };
     this.env.document.addEventListener('keydown', this.onKey);
+    this.env.document.addEventListener('selectionchange', this.onSelection);
+    this.field.addEventListener('keyup', this.onSelection);
     this.emit();
   }
 
   /**
-   * Open the keyboard. Must run in response to a user gesture (a pinch / trigger / click); the XR
-   * session's `select` event counts as one, so we also retry from the next `select` if the browser
-   * ignored the first focus.
+   * Open the keyboard with the whole text and the cursor where it was. Must run in response to a user
+   * gesture (a pinch / trigger / click); the XR session's `select` event counts as one, so we also
+   * retry from the next `select` if the browser ignored the first focus.
    */
   showKeyboard(): void {
     if (!this.active) return;
-    this.commitLive(true);
-    this.field.value = '';
-    this.field.focus({ preventScroll: true });
+    const focus = (): void => {
+      this.field.focus({ preventScroll: true });
+      this.field.setSelectionRange(this.state.caret, this.state.caret);
+    };
+    focus();
     const s = this.env.session();
     if (s && this.env.document.activeElement !== this.field) {
       const retry = (): void => {
         s.removeEventListener('selectend', retry);
-        if (this.active) this.field.focus({ preventScroll: true });
+        if (this.active) focus();
       };
       s.addEventListener('selectend', retry);
     }
@@ -134,50 +171,58 @@ export class TextInput {
     this.field.blur();
   }
 
-  /** Remove the last word (there is no reliable backspace into earlier keyboard sessions). */
-  deleteWord(): void {
-    this.commitLive(true);
-    this.state.committed = this.state.committed.replace(/(\s*\S+|\s+)$/u, '');
+  /** Move the cursor (e.g. pinching a spot in the text on the panel). */
+  setCaret(i: number): void {
+    this.state.caret = Math.max(0, Math.min(this.state.text.length, i));
+    this.field.setSelectionRange(this.state.caret, this.state.caret);
     this.emit();
+  }
+
+  /** Remove the word just before the cursor. */
+  deleteWord(): void {
+    const r = deleteWordBefore(this.state.text, this.state.caret);
+    this.setValue(r.text, r.caret);
   }
 
   /** Replace the whole text (e.g. another block was chosen) without closing the keyboard. */
   setText(text: string): void {
-    this.field.value = '';
-    this.state.committed = text;
-    this.state.live = '';
-    this.emit();
+    this.setValue(text, text.length);
   }
 
   clear(): void {
-    this.field.value = '';
-    this.state.committed = '';
-    this.state.live = '';
-    this.emit();
+    this.setValue('', 0);
   }
 
   /** Finish and return the text. */
   end(): string {
     if (!this.active) return '';
-    this.commitLive(true);
-    const out = this.state.committed;
+    const out = this.field.value;
     this.active = false;
     this.listener = null;
     this.field.blur();
     this.field.value = '';
     if (this.onKey) this.env.document.removeEventListener('keydown', this.onKey);
-    this.onKey = null;
+    if (this.onSelection) {
+      this.env.document.removeEventListener('selectionchange', this.onSelection);
+      this.field.removeEventListener('keyup', this.onSelection);
+    }
+    this.onKey = this.onSelection = null;
     this.onSubmit = this.onCancel = null;
+    this.state = { text: '', caret: 0, keyboardOpen: false };
     return out;
   }
 
-  private commitLive(keepOpen: boolean): void {
-    if (this.state.live) {
-      this.state.committed = join(this.state.committed, this.state.live);
-      this.state.live = '';
-      this.field.value = '';
-    }
-    if (!keepOpen) this.state.keyboardOpen = false;
+  private setValue(text: string, caret: number): void {
+    this.field.value = text;
+    this.field.setSelectionRange(caret, caret);
+    this.state.text = text;
+    this.state.caret = caret;
+    this.emit();
+  }
+
+  private sync(): void {
+    this.state.text = this.field.value;
+    this.state.caret = this.field.selectionStart ?? this.field.value.length;
     this.emit();
   }
 
@@ -189,14 +234,4 @@ export class TextInput {
     this.end();
     this.field.remove();
   }
-}
-
-/** Join two pieces of typed text, adding a space between latin words but not inside CJK. */
-export function join(a: string, b: string): string {
-  if (!a) return b;
-  if (!b) return a;
-  if (/\s$/.test(a) || /^\s/.test(b) || /^[,.;:!?，。；：！？、)]/.test(b)) return a + b;
-  const cjk = /[\u3000-鿿＀-￯]/;
-  if (cjk.test(a[a.length - 1]!) || cjk.test(b[0]!)) return a + b;
-  return a + ' ' + b;
 }

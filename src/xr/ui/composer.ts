@@ -4,8 +4,9 @@
  */
 import { t } from '../../app/i18n';
 import { COLORS } from '../theme';
-import { drawButton, fit, font, panelBackground, roundRect, wrap, type Ctx } from './draw';
+import { drawButton, fit, font, panelBackground, roundRect, type Ctx } from './draw';
 import { Surface } from './surface';
+import { CaretBox } from './text-layout';
 
 export interface ComposerModel {
   title: string;
@@ -13,6 +14,8 @@ export interface ComposerModel {
   context: string;
   placeholder: string;
   text: string;
+  /** caret index in `text` */
+  caret: number;
   keyboardOpen: boolean;
   /** show a "Skip" button (save without text) instead of only Cancel */
   skippable: boolean;
@@ -28,6 +31,7 @@ export class Composer extends Surface {
   model: ComposerModel | null = null;
   private caretOn = true;
   private caretTimer = 0;
+  private readonly textBox = new CaretBox(46, 24, 36);
 
   constructor(widthM = 0.56) {
     super(widthM, W, H);
@@ -40,6 +44,13 @@ export class Composer extends Surface {
   }
 
   /** Blink the caret (call with frame delta in seconds). */
+  /** Where a pinch on the text box puts the caret (null when it did not land on text). */
+  caretAtPoint(p: { x: number; y: number } | null): number | null {
+    if (!p) return null;
+    this.ctx.font = font(34, 400);
+    return this.textBox.caretAt(p.x, p.y, this.ctx);
+  }
+
   tick(dt: number): void {
     this.caretTimer += dt;
     if (this.caretTimer > 0.55) {
@@ -72,19 +83,8 @@ export class Composer extends Surface {
     ctx.stroke();
     this.hit({ id: 'type', ...box });
     ctx.font = font(34, 400);
-    const lineH = 46;
-    const maxLines = Math.floor((box.h - 30) / lineH);
     if (m.text) {
-      let lines = wrap(ctx, m.text, box.w - 48);
-      if (lines.length > maxLines) lines = lines.slice(lines.length - maxLines); // keep the end in view
-      ctx.fillStyle = COLORS.text;
-      lines.forEach((l, i) => ctx.fillText(l, box.x + 24, box.y + 36 + i * lineH));
-      if (this.caretOn && m.keyboardOpen) {
-        const last = lines[lines.length - 1] ?? '';
-        const cx = box.x + 24 + ctx.measureText(last).width + 4;
-        ctx.fillStyle = COLORS.accent;
-        ctx.fillRect(cx, box.y + 36 + (lines.length - 1) * lineH - 20, 4, 40);
-      }
+      this.textBox.draw(ctx, box, m.text, m.caret, this.caretOn && m.keyboardOpen);
     } else {
       ctx.fillStyle = COLORS.textFaint;
       ctx.fillText(fit(ctx, m.keyboardOpen ? m.placeholder : tr.typeHere, box.w - 48), box.x + 24, box.y + 36);

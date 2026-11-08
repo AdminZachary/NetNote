@@ -191,6 +191,7 @@ export class NetNoteApp {
   /** detected real-world planes (kept up to date by a small ECS system) */
   planes: Entity[] = [];
   private entities: Entity[] = [];
+  private retiring: { entity: Entity | null; surface: Surface }[] = [];
   private toastTimer = 0;
   private lastVersion = -1;
 
@@ -468,6 +469,7 @@ export class NetNoteApp {
   // ---------- frame ----------
 
   update(dt: number): void {
+    this.flushRetired();
     const { pos: eye, quat } = this.headPose();
     this.catcher.position.copy(eye);
     this.manip.update(dt);
@@ -744,7 +746,35 @@ export class NetNoteApp {
     return c;
   }
 
+  /**
+   * Take a panel out of the scene. It disappears now, but its entity is only torn down at the start of
+   * the next frame: the tap that closed it is still being delivered to it, and tearing it down in the
+   * middle of that delivery breaks the pointer system and stops the whole render loop.
+   */
+  private retire(s: Surface): void {
+    s.mesh.visible = false;
+    s.onAction = null;
+    const e = this.entities.find((x) => x.object3D === s.mesh);
+    if (e) this.entities.splice(this.entities.indexOf(e), 1);
+    this.retiring.push({ entity: e ?? null, surface: s });
+  }
+
+  private flushRetired(): void {
+    if (!this.retiring.length) return;
+    const list = this.retiring;
+    this.retiring = [];
+    for (const { entity, surface } of list) {
+      try {
+        if (entity) entity.dispose();
+        else surface.dispose();
+      } catch (err) {
+        console.warn('panel cleanup failed', err);
+      }
+    }
+  }
+
   private closeCard(c: NoteCard): void {
+    if (!this.cards.includes(c) && !this.onWall.has(c)) return; // already closed (a double tap)
     if (c.path) this.pinned.delete(c.path);
     const i = this.cards.indexOf(c);
     if (i >= 0) this.cards.splice(i, 1);
@@ -754,11 +784,7 @@ export class NetNoteApp {
     this.motion.delete(c);
     this.sound.play('close', c.mesh.position, null);
     if (this.onWall.delete(c)) this.wallChanged();
-    const e = this.entities.find((x) => x.object3D === c.mesh);
-    if (e) {
-      e.dispose();
-      this.entities.splice(this.entities.indexOf(e), 1);
-    } else c.dispose();
+    this.retire(c);
     if (this.graph.selected === c.path) this.graph.setSelected(this.cards[0]?.path ?? null);
   }
 
@@ -936,6 +962,7 @@ export class NetNoteApp {
         context,
         placeholder,
         text: this.input.text,
+        caret: this.input.caret,
         keyboardOpen: this.input.keyboardOpen,
         skippable,
         accent,
@@ -983,6 +1010,7 @@ export class NetNoteApp {
         blocks: mode.blocks,
         index: mode.index,
         text: this.input.text,
+        caret: this.input.caret,
         keyboardOpen: this.input.keyboardOpen,
         dirty: mode.dirty,
       });
@@ -1000,6 +1028,12 @@ export class NetNoteApp {
     if (!this.immersive) this.input.showKeyboard();
   }
 
+  /** A pinch on the text: put the cursor where it landed, and bring up the keyboard. */
+  private placeCaret(at: number | null): void {
+    if (at !== null) this.input.setCaret(at);
+    this.input.showKeyboard();
+  }
+
   private onEditor(id: string, data: string | undefined): void {
     const mode = this.writeMode;
     if (mode?.kind !== 'edit') return;
@@ -1010,7 +1044,7 @@ export class NetNoteApp {
     };
     switch (id) {
       case 'type':
-        this.input.showKeyboard();
+        this.placeCaret(this.editor.caretAtPoint(this.editor.lastPoint));
         break;
       case 'block':
         choose(Number(data));
@@ -1074,7 +1108,7 @@ export class NetNoteApp {
   }
 
   private onComposer(id: string): void {
-    if (id === 'type') this.input.showKeyboard();
+    if (id === 'type') this.placeCaret(this.composer.caretAtPoint(this.composer.lastPoint));
     else if (id === 'delete') this.input.deleteWord();
     else if (id === 'save') void this.saveComposer();
     else if (id === 'cancel') {
@@ -1313,11 +1347,7 @@ export class NetNoteApp {
   private layoutTags(groups: { path: string; spot: WallSpot }[][]): void {
     while (this.tags.length > groups.length) {
       const tag = this.tags.pop()!;
-      const e = this.entities.find((x) => x.object3D === tag.mesh);
-      if (e) {
-        e.dispose();
-        this.entities.splice(this.entities.indexOf(e), 1);
-      } else tag.dispose();
+      this.retire(tag);
     }
     const vault = this.library.vault;
     const name = (p: string): string => vault?.notes.get(p)?.name ?? p;

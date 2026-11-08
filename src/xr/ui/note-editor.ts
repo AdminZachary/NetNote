@@ -1,8 +1,9 @@
 /**
  * Editing a note in the headset, one block at a time (a paragraph, heading, list or code block):
  *   - pinch a block in the list (or step with ◀ ▶) to choose it; its text comes up in the box;
- *   - pinch the box to type with the Quest keyboard (or voice): what you type is added at the end;
- *     ⌫ removes the last word, "Clear" empties the block so you can say it again;
+ *   - pinch the box to type with the Quest keyboard (or voice); the pinch puts the cursor where it
+ *     landed, and the keyboard's own cursor works too, so text goes in (or out) anywhere;
+ *     ⌫ removes the word before the cursor, "Clear" empties the block so you can say it again;
  *   - "+ Below" starts a new block after this one, "Delete" removes it;
  *   - Save writes the note; nothing changes until you do.
  * Placed like the writing card (low and close, where the keyboard appears) but taller.
@@ -10,8 +11,9 @@
 import { t } from '../../app/i18n';
 import { blockPreview } from '../../core/markdown/blocks';
 import { COLORS } from '../theme';
-import { drawButton, fit, font, panelBackground, roundRect, wrap, type Ctx } from './draw';
+import { drawButton, fit, font, panelBackground, roundRect, type Ctx } from './draw';
 import { Surface } from './surface';
+import { CaretBox } from './text-layout';
 
 export interface EditorModel {
   name: string;
@@ -20,6 +22,8 @@ export interface EditorModel {
   index: number;
   /** the chosen block as it is being edited */
   text: string;
+  /** caret index in `text` */
+  caret: number;
   keyboardOpen: boolean;
   dirty: boolean;
 }
@@ -35,6 +39,7 @@ export class NoteEditor extends Surface {
   model: EditorModel | null = null;
   private caretOn = true;
   private caretTimer = 0;
+  private readonly textBox = new CaretBox(46, 24, 38);
 
   constructor(widthM = 0.62) {
     super(widthM, W, H);
@@ -46,6 +51,13 @@ export class NoteEditor extends Surface {
     this.model = m;
     if (moved) this.scrollToIndex(m.index);
     this.invalidate();
+  }
+
+  /** Where a pinch on the text box puts the caret (null when it did not land on text). */
+  caretAtPoint(p: { x: number; y: number } | null): number | null {
+    if (!p) return null;
+    this.ctx.font = font(34, 400);
+    return this.textBox.caretAt(p.x, p.y, this.ctx);
   }
 
   tick(dt: number): void {
@@ -90,18 +102,8 @@ export class NoteEditor extends Surface {
     ctx.stroke();
     this.hit({ id: 'type', ...box });
     ctx.font = font(34, 400);
-    const lineH = 46;
-    const maxLines = Math.floor((box.h - 30) / lineH);
     if (m.text) {
-      let lines = m.text.split('\n').flatMap((l) => (l ? wrap(ctx, l, box.w - 48) : ['']));
-      if (lines.length > maxLines) lines = lines.slice(lines.length - maxLines);
-      ctx.fillStyle = COLORS.text;
-      lines.forEach((l, i) => ctx.fillText(l, box.x + 24, box.y + 38 + i * lineH));
-      if (this.caretOn && m.keyboardOpen) {
-        const last = lines[lines.length - 1] ?? '';
-        ctx.fillStyle = COLORS.accent;
-        ctx.fillRect(box.x + 24 + ctx.measureText(last).width + 4, box.y + 38 + (lines.length - 1) * lineH - 20, 4, 40);
-      }
+      this.textBox.draw(ctx, box, m.text, m.caret, this.caretOn && m.keyboardOpen);
     } else {
       ctx.fillStyle = COLORS.textFaint;
       ctx.fillText(tr.typeHere, box.x + 24, box.y + 38);

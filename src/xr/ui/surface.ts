@@ -45,6 +45,8 @@ export abstract class Surface {
   private dirty = true;
   private drag: { pointerId: number; startY: number; startScroll: number; moved: boolean } | null = null;
   onAction: ActionHandler | null = null;
+  /** Canvas position of the latest click, so a handler can tell where inside a region it landed. */
+  lastPoint: { x: number; y: number } | null = null;
 
   constructor(
     readonly widthM: number,
@@ -113,6 +115,7 @@ export abstract class Surface {
 
   /** Simulate a click at canvas pixel coordinates (used by tests and keyboard shortcuts). */
   clickAt(px: number, py: number): boolean {
+    this.lastPoint = { x: px, y: py };
     const h = this.hitAt(px, py);
     if (h) this.onAction?.(h.id, h.data, this);
     return !!h;
@@ -183,6 +186,7 @@ export abstract class Surface {
       if (this.drag) this.mesh.releasePointerCapture(this.drag.pointerId);
       this.drag = null;
       if (wasDrag || !p) return;
+      this.lastPoint = p;
       const h = this.hitAt(p.x, p.y);
       if (h) this.onAction?.(h.id, h.data, this);
     });
