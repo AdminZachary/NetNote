@@ -60,18 +60,112 @@ async function desktop(browser) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await ready(page);
-  check('landing page is shown', await page.isVisible('[data-testid=landing]'));
+  check(
+    'the 2D workspace is shown, the library drawer tucked away',
+    (await page.isVisible('[data-testid=workspace]')) && !(await page.isVisible('[data-testid=landing] [data-testid=import-zip]')),
+  );
   const n = await page.evaluate(() => window.netnote.library.vault.notes.size);
   check('sample library is seeded on first run', n >= 30, `${n} notes`);
-  const pt = await page.evaluate(() => {
-    const { app, world } = window.netnote;
-    const p = app.graph.worldPos('Memory.md').clone().project(world.camera);
-    return { x: ((p.x + 1) / 2) * innerWidth, y: ((1 - p.y) / 2) * innerHeight };
+  await page.click('[data-testid=ws-library]');
+  await page.waitForTimeout(400);
+  check('"Library" opens the drawer (import, export, switch)', await page.isVisible('[data-testid=import-zip]'));
+  await page.click('[data-testid=close-library]');
+
+  // write in a real text field: put the cursor in the middle and type there
+  await page.click('[data-path="Walking.md"]');
+  await page.waitForTimeout(200);
+  check('a note opens in the middle', (await page.inputValue('[data-testid=ws-title]')) === 'Walking');
+  const raw0 = await page.inputValue('[data-testid=ws-text]');
+  const at = raw0.indexOf('\n', raw0.indexOf('# Walking')) + 1;
+  await page.evaluate((at) => {
+    const t = document.querySelector('[data-testid=ws-text]');
+    t.focus();
+    t.setSelectionRange(at, at);
+  }, at);
+  await page.keyboard.type('Typed from the desk. ');
+  await page.waitForTimeout(1500);
+  const saved = await page.evaluate(() => window.netnote.library.vault.notes.get('Walking.md').raw);
+  check('typing anywhere in the note saves by itself', saved.slice(at, at + 21) === 'Typed from the desk. ', saved.slice(at - 5, at + 25));
+
+  // [[ offers notes to link, Enter takes the highlighted one
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\nSee [[Slee');
+  await page.waitForTimeout(250);
+  const chips = await page.$$eval('[data-testid=ws-link-pop] .nn-chip', (b) => b.map((x) => x.textContent));
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(400);
+  const linked = await page.evaluate(() => window.netnote.library.vault.notes.get('Walking.md').raw);
+  check('typing [[ offers notes to link; Enter completes the link; Ctrl+S saves', chips.length > 0 && linked.includes(`See [[${chips[0]}]]`), chips.join(', '));
+
+  // reading view: links are live
+  await page.click('[data-testid=ws-read]');
+  await page.waitForTimeout(200);
+  await page.click(`.nn-read [data-link="${chips[0]}"]`);
+  await page.waitForTimeout(300);
+  check('in the reading view a link opens its note', (await page.inputValue('[data-testid=ws-title]')) === chips[0]);
+  const side = await page.$$eval('[data-testid=ws-in] .nn-go b', (b) => b.map((x) => x.textContent));
+  check('its connections show who links to it', side.includes('Walking'), side.slice(0, 5).join(', '));
+
+  // a new note, renamed through its title, then deleted with an in-page confirmation
+  await page.click('[data-testid=ws-new]');
+  await page.waitForTimeout(300);
+  await page.keyboard.type('Desk thoughts');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(500);
+  const named = await page.evaluate(() => [...window.netnote.library.vault.notes.values()].some((x) => x.name === 'Desk thoughts'));
+  check('"New note" puts you in its title; Enter renames it', named);
+  await page.click('[data-testid=ws-delete]');
+  await page.click('[data-testid=ws-confirm-delete]');
+  await page.waitForTimeout(400);
+  const gone = await page.evaluate(() => ![...window.netnote.library.vault.notes.values()].some((x) => x.name === 'Desk thoughts'));
+  check('delete asks in the page, then deletes', gone);
+
+  // a change made elsewhere (in the headset) shows up while you are not typing
+  await page.click('[data-path="Walking.md"]');
+  await page.waitForTimeout(200);
+  await page.evaluate(async () => {
+    const lib = window.netnote.library;
+    await lib.saveNote('Walking.md', lib.vault.notes.get('Walking.md').raw + '\nAdded in the headset.\n');
   });
-  await page.mouse.click(pt.x, pt.y);
+  await page.waitForTimeout(300);
+  check('edits made in the headset appear here', (await page.inputValue('[data-testid=ws-text]')).includes('Added in the headset.'));
+
+  // the 3D preview is still there behind the page
+  await page.click('[data-testid=ws-graph]');
+  // the edits above re-laid the graph out: let the stars settle, then click the one nearest to you
+  await page.waitForFunction(
+    () => {
+      const { app } = window.netnote;
+      const p = app.graph.worldPos('Memory.md').clone();
+      const last = window.__lastMemory;
+      window.__lastMemory = p;
+      return last && last.distanceTo(p) < 1e-4;
+    },
+    null,
+    { timeout: 15000, polling: 300 },
+  );
+  const pick = await page.evaluate(() => {
+    const { app, world } = window.netnote;
+    const cam = world.camera.position;
+    const best = app.graph.nodes
+      .filter((n) => !n.ghost && !n.file)
+      .map((n) => ({ id: n.id, p: app.graph.worldPos(n.id) }))
+      .filter((o) => {
+        const s = o.p.clone().project(world.camera);
+        return Math.abs(s.x) < 0.8 && s.y < 0.6 && s.y > -0.8 && s.z < 1;
+      })
+      .sort((a, b) => a.p.distanceTo(cam) - b.p.distanceTo(cam))[0];
+    const s = best.p.clone().project(world.camera);
+    return { id: best.id, name: window.netnote.library.vault.notes.get(best.id).name, x: ((s.x + 1) / 2) * innerWidth, y: ((1 - s.y) / 2) * innerHeight };
+  });
+  await page.mouse.click(pick.x, pick.y);
   await page.waitForTimeout(800);
   const s = await state(page);
-  check('clicking a star opens its card (desktop preview)', s.cards[0] === 'Memory.md', JSON.stringify(s.cards));
+  check('"Graph" shows the 3D preview; clicking a star opens its card', s.cards[0] === pick.id, `${pick.id} → ${JSON.stringify(s.cards)}`);
+  await page.click('[data-testid=ws-graph]');
+  await page.waitForTimeout(300);
+  check('back in the workspace, the note you picked there is open', (await page.inputValue('[data-testid=ws-title]')) === pick.name);
   check('no page errors (desktop)', errors.length === 0, errors[0]);
   await page.close();
 }
@@ -290,20 +384,15 @@ async function insights(browser) {
   const yaw1 = await facing(far);
   check('the map in your hand shows', visible);
   check('picking a note on the map turns the graph so it faces you', yaw1 < 15 && yaw0 > 60, `${yaw0.toFixed(0)}° → ${yaw1.toFixed(0)}°`);
-  const turned = await page.evaluate(async () => {
+  const follows = await page.evaluate(async () => {
     const { app } = window.netnote;
     const Q = app.graph.root.quaternion.constructor;
     const V = app.graph.root.position.constructor;
-    const q0 = app.graph.root.quaternion.clone();
-    app.minimap.onRotate(new Q().setFromAxisAngle(new V(1, 0, 0), 0.5));
+    app.graph.root.quaternion.multiply(new Q().setFromAxisAngle(new V(1, 0, 0), 0.5));
     await new Promise((r) => setTimeout(r, 200));
-    return {
-      big: app.graph.root.quaternion.angleTo(q0),
-      map: app.minimap.group.quaternion.angleTo(app.graph.root.quaternion),
-      bezel: !!app.minimap.group.getObjectByName('minimap-bezel'),
-    };
+    return { map: app.minimap.group.quaternion.angleTo(app.graph.root.quaternion), noRing: !app.minimap.group.getObjectByName('minimap-bezel') };
   });
-  check('turning the map turns the big graph with it, freely', turned.bezel && Math.abs(turned.big - 0.5) < 0.02 && turned.map < 0.01, JSON.stringify(turned));
+  check('the map always shows the big graph the way it is turned', follows.map < 0.01 && follows.noRing, JSON.stringify(follows));
   check('no page errors (insights)', errors.length === 0, errors[0]);
   await ctx.close();
 }
@@ -544,6 +633,8 @@ async function handsDirect(browser) {
   await page.waitForTimeout(600);
   const pressed = await poke('search');
   check('a fingertip press on the menu works (no ray needed)', pressed.acted === 'search', String(pressed.acted));
+  const onlyMenu = await page.evaluate(() => window.netnote.app.pokeable.map((o) => o.name).sort());
+  check('only the menu bar answers a fingertip; other panels take the ray', onlyMenu.join() === 'dock,tools', onlyMenu.join());
   check('with hands, the menu sits within reach of a fingertip', pressed.dist < 0.56, `${pressed.dist.toFixed(2)} m`);
   await page.evaluate(() => window.netnote.app.closeSearch?.());
   await page.waitForTimeout(300);
@@ -571,48 +662,68 @@ async function handsDirect(browser) {
     return { visible: app.minimap.visible, gap: Math.hypot(m.x - h.x, m.z - h.z), above: m.y - h.y };
   });
   check('turning the left palm up brings the map onto it', !before && shown.visible && shown.gap < 0.12, JSON.stringify(shown));
-  // zoom: drag the knob on the rail all the way up with the right hand's ray
-  const zoom = await page.evaluate(async () => {
+  // hold the map in both hands: pinch at its left and right edges, then pull apart and turn
+  const hold = await page.evaluate(async () => {
     const { app } = window.netnote;
-    const c = app.minimap.controlsGroup;
-    const V = c.position.constructor;
-    const Q = c.quaternion.constructor;
-    const s0 = app.graph.root.scale.x;
-    const hand = window.IWER_DEVICE.hands.right;
+    const m = app.minimap.group.position.clone();
+    const V = m.constructor;
     const wait = (ms) => new Promise((res) => setTimeout(res, ms));
-    // aim the hand's real ray (which need not leave along the hand's own axis) at a point on the rail
-    const ray = window.netnote.world.player.raySpaces.right;
-    const aimAt = async (y) => {
-      c.updateMatrixWorld();
-      const target = c.localToWorld(new V(0, y, 0));
-      hand.position.set(0.2, 1.3, -0.1);
+    const hands = window.IWER_DEVICE.hands;
+    // move a hand so its pinch point (between thumb and index tips) lands on a target
+    const put = async (h, target) => {
       for (let i = 0; i < 4; i++) {
-        await wait(60);
-        ray.updateMatrixWorld();
-        const o = new V().setFromMatrixPosition(ray.matrixWorld);
-        const dir = new V(0, 0, -1).applyQuaternion(ray.getWorldQuaternion(new Q()));
-        const fix = new Q().setFromUnitVectors(dir, target.clone().sub(o).normalize());
-        const hq = hand.quaternion;
-        const q = fix.multiply(new Q(hq.x, hq.y, hq.z, hq.w));
-        hand.quaternion.set(q.x, q.y, q.z, q.w);
+        await wait(90);
+        const off = target.clone().sub(app.pinches[h].at);
+        const p = hands[h].position;
+        hands[h].position.set(p.x + off.x, p.y + off.y, p.z + off.z);
       }
     };
-    await aimAt(0);
-    await wait(200);
-    hand.updatePinchValue(1);
-    await wait(250);
-    for (let i = 1; i <= 6; i++) {
-      await aimAt(i * 0.012);
-    }
-    const mid = app.graph.root.scale.x;
-    hand.updatePinchValue(0);
+    const s0 = app.graph.root.scale.x;
+    const q0 = app.graph.root.quaternion.clone();
+    // where the pinch point sits relative to each hand once the fingers are closed
+    hands.left.updatePinchValue(1);
+    hands.right.updatePinchValue(1);
     await wait(300);
-    return { s0, s1: mid, level: app.minimap.zoomLevel };
+    const offs = {};
+    for (const h of ['left', 'right']) {
+      const p = hands[h].position;
+      offs[h] = app.pinches[h].at.clone().sub(new V(p.x, p.y, p.z));
+    }
+    hands.left.updatePinchValue(0);
+    hands.right.updatePinchValue(0);
+    await wait(200);
+    // bring the open hands to the ball's left and right edges, then close both pinches there
+    for (const [h, dx] of [
+      ['left', -0.05],
+      ['right', 0.05],
+    ]) {
+      const at = m
+        .clone()
+        .add(new V(dx, 0, 0))
+        .sub(offs[h]);
+      hands[h].position.set(at.x, at.y, at.z);
+    }
+    await wait(200);
+    hands.left.updatePinchValue(1);
+    hands.right.updatePinchValue(1);
+    await wait(400);
+    const held = app.minimap.held;
+    // pull apart to twice the distance, and raise the right hand (a turn)
+    for (let i = 1; i <= 5; i++) {
+      await put('right', m.clone().add(new V(0.05 + i * 0.012, i * 0.012, 0)));
+      await put('left', m.clone().add(new V(-0.05 - i * 0.008, 0, 0)));
+    }
+    const s1 = app.graph.root.scale.x;
+    const turned = app.graph.root.quaternion.angleTo(q0);
+    hands.left.updatePinchValue(0);
+    hands.right.updatePinchValue(0);
+    await wait(300);
+    return { held, s0, s1, turned, after: app.minimap.held, visible: app.minimap.visible };
   });
   check(
-    'sliding the zoom rail up enlarges the big graph to match',
-    zoom.s1 > zoom.s0 * 1.3,
-    `${zoom.s0.toFixed(4)} → ${zoom.s1.toFixed(4)}, knob ${zoom.level.toFixed(2)}`,
+    'pinching the map with both hands takes hold of it; pulling apart zooms and turning turns the big graph',
+    hold.held && hold.s1 > hold.s0 * 1.4 && hold.turned > 0.15 && !hold.after,
+    `zoom ×${(hold.s1 / hold.s0).toFixed(2)}, turned ${((hold.turned * 180) / Math.PI).toFixed(0)}°`,
   );
   await palm(false);
   await page.waitForTimeout(1200);

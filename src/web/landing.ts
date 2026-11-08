@@ -1,9 +1,9 @@
 /**
- * The 2D page around the headset experience: pick or import a library, export it, choose a language
- * and step into VR or mixed reality. On a desktop it floats over the live 3D preview.
+ * The library drawer of the 2D page: pick, import, export or remove a library. It slides in over the
+ * workspace (see workspace.ts, which also holds the buttons to step into VR or mixed reality).
  * No native browser dialogs: confirmations and messages are drawn in the page.
  */
-import { getLocale, setLocale, t, type Locale } from '../app/i18n';
+import { getLocale, t } from '../app/i18n';
 import type { Library } from '../app/library';
 import type { StoredVault } from '../storage/store';
 import { readFileList } from '../storage/transfer';
@@ -12,28 +12,29 @@ export interface LandingDeps {
   library: Library;
   /** which immersive modes this browser offers */
   support: { vr: boolean; ar: boolean };
-  enter(mode: 'vr' | 'ar'): void;
+  /** close the drawer */
+  close(): void;
   /** open a library by id (also remembers it) */
   open(id: string): Promise<void>;
-  onLocale(l: Locale): void;
 }
 
 const CSS = `
-.tr-panel{position:fixed;top:16px;left:16px;width:min(380px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;
+.tr-panel{position:fixed;top:76px;right:16px;width:min(380px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;
   box-sizing:border-box;padding:22px 22px 18px;border-radius:20px;background:rgba(7,12,26,.86);backdrop-filter:blur(14px);
   -webkit-backdrop-filter:blur(14px);border:1px solid rgba(94,231,255,.25);box-shadow:0 20px 60px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.03);
-  color:#e8f1ff;font:14px/1.45 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;z-index:10;transition:transform .25s,opacity .25s}
-.tr-panel.tr-hidden{transform:translateX(calc(-100% - 24px));opacity:0;pointer-events:none}
+  color:#e8f1ff;font:15px/1.5 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;z-index:10;transition:transform .25s,opacity .25s,visibility 0s}
+.tr-panel.tr-hidden{transform:translateX(calc(100% + 24px));opacity:0;pointer-events:none;visibility:hidden;transition:transform .25s,opacity .25s,visibility 0s .25s}
 .tr-panel h1{margin:0 0 4px;font-size:24px;letter-spacing:.02em;background:linear-gradient(90deg,#5ee7ff,#b18cff);-webkit-background-clip:text;background-clip:text;color:transparent}
 .tr-panel p{margin:0 0 14px;color:#9fb3d1}
 .tr-row{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}
-.tr-btn{appearance:none;border:1px solid rgba(94,231,255,.35);background:rgba(94,231,255,.08);color:#e8f1ff;border-radius:12px;padding:9px 14px;
+.tr-btn{appearance:none;border:1px solid rgba(94,231,255,.35);background:rgba(94,231,255,.08);color:#e8f1ff;border-radius:12px;padding:9px 14px;min-height:44px;
   font:inherit;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s}
 .tr-btn:hover{background:rgba(94,231,255,.18);border-color:rgba(94,231,255,.7)}
 .tr-btn:disabled{opacity:.4;cursor:default}
 .tr-btn.tr-primary{flex:1;padding:13px 16px;font-size:16px;background:linear-gradient(135deg,rgba(94,231,255,.35),rgba(177,140,255,.35));border-color:rgba(160,220,255,.7)}
 .tr-btn.tr-danger{border-color:rgba(255,120,140,.5);background:rgba(255,90,120,.12)}
-.tr-btn.tr-small{padding:5px 10px;font-size:12px;border-radius:9px}
+.tr-btn.tr-small{padding:5px 12px;font-size:13px;border-radius:10px;min-height:36px}
+.tr-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
 .tr-h{margin:16px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#7f93b3}
 .tr-lib{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.06);margin-bottom:6px;background:rgba(255,255,255,.02)}
 .tr-lib.tr-on{border-color:rgba(94,231,255,.45);background:rgba(94,231,255,.07)}
@@ -88,6 +89,10 @@ export class Landing {
     this.panel.classList.toggle('tr-hidden', v);
   }
 
+  get hidden(): boolean {
+    return this.panel.classList.contains('tr-hidden');
+  }
+
   toast(text: string): void {
     this.toastEl.textContent = text;
     this.toastEl.classList.add('tr-show');
@@ -101,15 +106,12 @@ export class Landing {
     const el = this.el.bind(this);
     const p = this.panel;
     p.replaceChildren();
-    p.append(el('h1', tr.appName), el('p', tr.tagline));
-
-    const enter = el('div', null, 'tr-row');
-    const vr = this.button(tr.enterVR, () => this.deps.enter('vr'), 'tr-primary', 'enter-vr');
-    vr.disabled = !this.deps.support.vr;
-    const ar = this.button(tr.enterAR, () => this.deps.enter('ar'), 'tr-primary', 'enter-ar');
-    ar.disabled = !this.deps.support.ar;
-    enter.append(vr, ar);
-    p.append(enter);
+    const head = el('div', null, 'tr-head');
+    head.append(
+      el('h1', tr.wsLibrary),
+      this.button('✕', () => this.deps.close(), 'tr-small', 'close-library'),
+    );
+    p.append(head, el('p', tr.tagline));
     if (!this.deps.support.vr && !this.deps.support.ar) p.append(el('p', tr.noXR, 'tr-note'));
 
     p.append(el('div', tr.vaults, 'tr-h'));
@@ -142,10 +144,7 @@ export class Landing {
     p.append(el('p', tr.devices, 'tr-note'), el('p', tr.previewHint, 'tr-note'));
 
     const foot = el('div', null, 'tr-foot');
-    foot.append(
-      el('span', lib.vault ? `${lib.vault.notes.size} ${tr.notes}` : '', 'tr-note'),
-      this.button(tr.language, () => this.toggleLocale(), 'tr-small', 'language'),
-    );
+    foot.append(el('span', lib.vault ? `${lib.vault.notes.size} ${tr.notes}` : '', 'tr-note'));
     p.append(foot);
   }
 
@@ -158,13 +157,6 @@ export class Landing {
 
   private setConfirm(id: string | null): void {
     this.confirming = id;
-    this.render();
-  }
-
-  private toggleLocale(): void {
-    const next: Locale = getLocale() === 'zh' ? 'en' : 'zh';
-    setLocale(next);
-    this.deps.onLocale(next);
     this.render();
   }
 

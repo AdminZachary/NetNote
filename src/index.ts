@@ -5,10 +5,11 @@
 import { createSystem, SessionMode, World } from '@iwsdk/core';
 import projectOptions from 'virtual:iwsdk-project';
 import { chooseLibrary, sampleFiles } from './app/bootstrap';
-import { detectLocale, setLocale, type Locale } from './app/i18n';
+import { detectLocale, getLocale, setLocale, type Locale } from './app/i18n';
 import { Library } from './app/library';
 import { IdbStore } from './storage/store';
 import { Landing } from './web/landing';
+import { Workspace } from './web/workspace';
 import { NetNoteApp } from './xr/app';
 
 const LAST = 'netnote.last';
@@ -90,37 +91,56 @@ async function main(): Promise<void> {
   const library = new Library(await IdbStore.open());
   const sample = sampleFiles(import.meta.glob<string>('/sample-vault/**/*.{md,canvas}', { query: '?raw', import: 'default', eager: true }));
 
-  app = new NetNoteApp(world, library, { onExit: () => (landing.hidden = false) });
+  app = new NetNoteApp(world, library, { onExit: () => (workspace.hidden = false) });
 
   const open = async (id: string): Promise<void> => {
     await library.open(id);
     storage.set(LAST, id);
   };
+  const support = await xrSupport();
   const landing = new Landing(document.body, {
     library,
-    support: await xrSupport(),
+    support,
     open,
+    close: () => (landing.hidden = true),
+  });
+  landing.hidden = true;
+  const workspace = new Workspace(document.body, {
+    library,
+    support,
     enter: (mode) => {
       landing.hidden = true;
+      workspace.hidden = true;
       world.launchXR(
         mode === 'ar'
           ? { sessionMode: SessionMode.ImmersiveAR, features: { handTracking: true, planeDetection: true, anchors: true, hitTest: true } }
           : { sessionMode: SessionMode.ImmersiveVR, features: { handTracking: true } },
       );
     },
-    onLocale: (l: Locale) => {
-      storage.set(LOCALE, l);
+    toggleLibrary: () => (landing.hidden = !landing.hidden),
+    onLocale: () => {
+      const next: Locale = getLocale() === 'zh' ? 'en' : 'zh';
+      setLocale(next);
+      storage.set(LOCALE, next);
       app?.relabel();
+      workspace.render();
+      landing.render();
     },
+    // the 3D preview behind the page: when you come back, open the note you were looking at there
+    onPreview: (on) => {
+      if (!on && app?.graph.selected) void workspace.open(app.graph.selected);
+    },
+    toast: (text) => landing.toast(text),
   });
   library.on('error', (e) => landing.toast(e.message));
 
   await open(await chooseLibrary(library, sample, storage.get(LAST)));
   await landing.refresh();
+  workspace.render();
   document.documentElement.lang = saved ?? navigator.language;
 
   // test & debugging hook (also used by the end-to-end tests)
-  (window as unknown as { netnote: unknown }).netnote = { world, library, app, landing };
+  (window as unknown as { netnote: unknown }).netnote = { world, library, app, landing, workspace };
 }
 
 main().catch((e: unknown) => {
