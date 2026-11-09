@@ -43,7 +43,9 @@ export abstract class Surface {
   protected scrollY = 0;
   protected maxScroll = 0;
   private dirty = true;
-  private drag: { pointerId: number; startY: number; startScroll: number; moved: boolean } | null = null;
+  private drag: { pointerId: number; startY: number; startScroll: number; moved: boolean; lastY: number; lastT: number; vel: number } | null = null;
+  /** scroll speed left over from a flick (canvas px per second), slowing down each frame */
+  private fling = 0;
   onAction: ActionHandler | null = null;
   /** Called when a finger (or ray) presses a button on any panel: for a click sound and a tick. */
   static onPress: ((surface: Surface, kind: 'touch' | 'ray', at: { x: number; y: number; z: number }) => void) | null = null;
@@ -151,6 +153,20 @@ export abstract class Surface {
     return h ? { x: h.x + h.w / 2, y: h.y + h.h / 2 } : null;
   }
 
+  /** Carry on a flick (call every frame with the frame time in seconds). */
+  glide(dt: number): void {
+    if (!this.fling) return;
+    const before = this.scrollY;
+    this.scrollBy(this.fling * dt);
+    this.fling *= Math.exp(-dt * 3.5);
+    if (Math.abs(this.fling) < 40 || this.scrollY === before) this.fling = 0;
+  }
+
+  /** Scroll position, for tests. */
+  get scrolled(): number {
+    return this.scrollY;
+  }
+
   protected scrollBy(dy: number): void {
     const next = Math.max(0, Math.min(this.maxScroll, this.scrollY + dy));
     if (next !== this.scrollY) {
@@ -162,6 +178,14 @@ export abstract class Surface {
   /** Is this an XR press arriving while you are typing? (Mouse clicks always pass.) */
   static quiet(e: XRPointerEvent): boolean {
     return performance.now() < Surface.quietUntil && !/mouse|pen|screen/i.test(e.pointerType);
+  }
+
+  /** While dragging (pointer captured) the uv is stale: use where the ray crosses the panel's plane. */
+  private planePx(e: XRPointerEvent): { x: number; y: number } | null {
+    const q = (e as unknown as { pointOnFace?: { x: number; y: number; z: number } }).pointOnFace ?? e.point;
+    if (!q) return null;
+    const l = this.mesh.worldToLocal(new Vector3(q.x, q.y, q.z));
+    return { x: (l.x / this.widthM + 0.5) * this.pxW, y: (0.5 - l.y / this.heightM) * this.pxH };
   }
 
   private toPx(e: XRPointerEvent): { x: number; y: number } | null {
@@ -179,11 +203,16 @@ export abstract class Surface {
       addEventListener(type: string, fn: (e: XRPointerEvent) => void): void;
     };
     m.addEventListener('pointermove', (e) => {
-      const p = this.toPx(e);
+      const p = this.drag?.pointerId === e.pointerId ? this.planePx(e) : this.toPx(e);
       if (!p) return;
       if (this.drag && this.drag.pointerId === e.pointerId) {
         const dy = this.drag.startY - p.y;
         if (Math.abs(dy) > 12) this.drag.moved = true;
+        const now = performance.now();
+        const dt = Math.max(1, now - this.drag.lastT) / 1000;
+        this.drag.vel = this.drag.vel * 0.6 + ((this.drag.lastY - p.y) / dt) * 0.4;
+        this.drag.lastY = p.y;
+        this.drag.lastT = now;
         if (this.drag.moved) {
           this.scrollY = Math.max(0, Math.min(this.maxScroll, this.drag.startScroll + dy));
           this.invalidate();
@@ -223,7 +252,8 @@ export abstract class Surface {
       }
       const inScroll = this.hits.some((h) => h.scroll && inRect(h, p.x, p.y));
       if (inScroll && this.maxScroll > 0) {
-        this.drag = { pointerId: e.pointerId, startY: p.y, startScroll: this.scrollY, moved: false };
+        this.fling = 0; // a pinch on moving text stops it
+        this.drag = { pointerId: e.pointerId, startY: p.y, startScroll: this.scrollY, moved: false, lastY: p.y, lastT: performance.now(), vel: 0 };
         this.mesh.setPointerCapture(e.pointerId);
       }
     });
@@ -238,6 +268,9 @@ export abstract class Surface {
       // a fingertip lifts off wherever it drifted: the press counts where it touched down
       const p = down?.touch ? down : this.toPx(e);
       const wasDrag = this.drag?.moved;
+      // let go while moving: the text carries on and slows down, like a phone
+      if (wasDrag && this.drag && performance.now() - this.drag.lastT < 120 && Math.abs(this.drag.vel) > 300)
+        this.fling = Math.max(-6000, Math.min(6000, this.drag.vel));
       if (this.drag) this.mesh.releasePointerCapture(this.drag.pointerId);
       this.drag = null;
       // only a press that started on this panel clicks (a finger arriving from behind does not)

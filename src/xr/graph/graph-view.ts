@@ -300,9 +300,12 @@ export class GraphView {
     if (this.styleDirty && this.nodeMesh.instanceColor) this.nodeMesh.instanceColor.needsUpdate = true;
     this.pickMesh.computeBoundingSphere();
 
-    // links: a thin cylinder from s to t; constant ~2 mm in the world whatever the graph scale
+    // links: a cylinder from s to t, constant width in the world whatever the graph scale. With nothing
+    // selected the whole web is the picture, so links are bolder (~5–6 mm, clearly visible at 1.5 m
+    // on a Quest 3 panel); once a note is selected the rest steps back and its own links stand out.
     const scale = this.root.getWorldScale(tmpV2).x || 1;
-    const radius = (this.style.passthrough ? 0.0022 : 0.0016) / scale;
+    const calm = !dimOthers;
+    const radius = (this.style.passthrough ? (calm ? 0.0032 : 0.0022) : calm ? 0.0027 : 0.0016) / scale;
     for (let k = 0; k < this.links.length; k++) {
       const l = this.links[k]!;
       const a = this.positions[l.s]!;
@@ -317,13 +320,13 @@ export class GraphView {
       tmpM.compose(a, tmpQ, tmpV2.set(radius * w, len, radius * w));
       this.linkMesh.setMatrixAt(k, tmpM);
       if (this.styleDirty) {
-        let alpha = l.hub ? 0.12 : l.cross ? 0.42 : 0.3;
+        let alpha = calm ? (l.hub ? 0.26 : l.cross ? 0.7 : 0.58) : l.hub ? 0.12 : l.cross ? 0.42 : 0.3;
         if (dimOthers) alpha = touchesFocus || (lit.has(sid) && lit.has(tid) && !focus) ? 0.95 : alpha * 0.25;
         if (this.style.passthrough) alpha = Math.min(1, alpha * 1.3);
         alpha *= Math.min(this.growth[l.s] ?? 1, this.growth[l.t] ?? 1);
         this.linkAlpha.setX(k, alpha);
         tmpC.set(this.colorOf(touchesFocus ? (sid === focus ? tid : sid) : sid));
-        if (!touchesFocus) tmpC.lerp(new Color(0x9fb0cc), 0.5);
+        if (!touchesFocus) tmpC.lerp(new Color(0x9fb0cc), calm ? 0.22 : 0.5);
         this.linkMesh.setColorAt(k, tmpC);
       }
     }

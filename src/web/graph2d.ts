@@ -9,6 +9,12 @@
  *     click opens it for writing.
  * Names are shown for hubs, for what you point at and its neighbours, and for everything once you
  * zoom in far enough to read them, so the map never turns into a wall of text.
+ *
+ * Motion follows the headset view, in 2D: stars pop in when the map first shows, what you point at
+ * grows, a selected note sends out a pulse, glides to the middle, its neighbours light up while the
+ * rest fades back, and light flows along its links (cyan to the notes it links to, violet from the
+ * notes that link to it). Every change eases; nothing moves on its own except the flows of the
+ * selected note, and all of it is skipped when the system asks for reduced motion.
  */
 import { t } from '../app/i18n';
 import type { Library } from '../app/library';
@@ -28,7 +34,18 @@ interface Dot {
   color: string;
   ghost: boolean;
   degree: number;
+  /** eased display state: 0..1 lit, size factor, 0..1 born (pop-in) */
+  lit: number;
+  grow: number;
+  born: number;
+  /** when it starts popping in (ms, performance clock) */
+  bornAt: number;
 }
+
+const OUT = '94,231,255';
+const IN = '177,140,255';
+const easeInOut = (k: number): number => (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2);
+const reduced = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 export const GRAPH2D_CSS = `
 .nn-g2{position:relative;min-height:0;overflow:hidden;background:radial-gradient(ellipse at 50% 40%,#0d1836 0%,#070c1a 70%)}
@@ -51,7 +68,10 @@ export class Graph2D {
   private readonly card: HTMLDivElement;
   private dots: Dot[] = [];
   private index = new Map<string, Dot>();
-  private links: [Dot, Dot][] = [];
+  private links: { a: Dot; b: Dot; lit: number }[] = [];
+  private last = 0;
+  private selectAt = 0;
+  private glide: { from: { x: number; y: number }; to: { x: number; y: number }; t0: number } | null = null;
   private neighbours = new Map<string, Set<string>>();
   private version = -1;
   private view = { x: 0, y: 0, k: 1 };
@@ -128,6 +148,7 @@ export class Graph2D {
     }
     for (const n of nodes) n.degree = deg.get(n.id) ?? 0;
     const prev = new Map(this.dots.map((d) => [d.id, { x: d.x, y: d.y, z: 0 }]));
+    const old = new Map(this.dots.map((d) => [d.id, d.born]));
     const pos = layoutGraph(nodes, g.links, { dims: 2, previous: prev.size ? prev : undefined });
     const byId = new Map(g.nodes.map((n) => [n.id, n]));
     this.dots = nodes.map((n) => {
@@ -142,8 +163,17 @@ export class Graph2D {
         color: n.ghost ? '#3a4152' : t === undefined ? NO_TOPIC : TOPIC_COLORS[t % TOPIC_COLORS.length]!,
         ghost: !!n.ghost,
         degree: n.degree,
+        lit: 1,
+        grow: 1,
+        born: old.get(n.id) ? 1 : 0,
+        bornAt: 0,
       };
     });
+    // new stars pop in, hubs first, spread over ~0.6 s
+    const fresh = this.dots.filter((d) => d.born === 0).sort((a, b) => b.degree - a.degree);
+    const t0 = performance.now();
+    fresh.forEach((d, i) => (d.bornAt = t0 + (i / Math.max(1, fresh.length)) * 600));
+    if (reduced()) for (const d of fresh) d.born = 1;
     this.index = new Map(this.dots.map((d) => [d.id, d]));
     this.neighbours = new Map();
     this.links = [];
@@ -151,7 +181,7 @@ export class Graph2D {
       const a = this.index.get(l.source);
       const b = this.index.get(l.target);
       if (!a || !b || a === b) continue;
-      this.links.push([a, b]);
+      this.links.push({ a, b, lit: 1 });
       if (!this.neighbours.has(a.id)) this.neighbours.set(a.id, new Set());
       if (!this.neighbours.has(b.id)) this.neighbours.set(b.id, new Set());
       this.neighbours.get(a.id)!.add(b.id);
@@ -318,8 +348,14 @@ export class Graph2D {
   }
 
   /** Select a note (or nothing): it and its neighbours light up, and its card shows. */
-  select(id: string | null): void {
+  select(id: string | null, glide = true): void {
+    if (id !== this.selected) this.selectAt = performance.now();
     this.selected = id;
+    const to = id ? this.index.get(id) : undefined;
+    if (to && glide) {
+      if (reduced()) this.centreOn(to.id);
+      else this.glide = { from: { x: this.view.x, y: this.view.y }, to: { x: to.x, y: to.y }, t0: performance.now() };
+    }
     this.card.replaceChildren();
     const vault = this.library.vault;
     const note = id ? vault?.notes.get(id) : undefined;
@@ -370,32 +406,91 @@ export class Graph2D {
     const ctx = this.ctx;
     const w = this.root.clientWidth;
     const h = this.root.clientHeight;
+    const now = performance.now();
+    const dt = Math.min(0.1, this.last ? (now - this.last) / 1000 : 0.016);
+    this.last = now;
     ctx.clearRect(0, 0, w, h);
-    if (!this.dots.length) return;
+    if (!this.dots.length || !w) return;
+    const calm = reduced();
+    let moving = false;
+    const ease = (v: number, to: number, rate: number): number => {
+      if (calm) return to;
+      const n = v + (to - v) * Math.min(1, dt * rate);
+      if (Math.abs(n - to) > 0.002) moving = true;
+      return Math.abs(n - to) > 0.002 ? n : to;
+    };
+    // the selected note glides to the middle
+    if (this.glide) {
+      const k = Math.min(1, (now - this.glide.t0) / 450);
+      const e = easeInOut(k);
+      this.view.x = this.glide.from.x + (this.glide.to.x - this.glide.from.x) * e;
+      this.view.y = this.glide.from.y + (this.glide.to.y - this.glide.from.y) * e;
+      if (k >= 1) this.glide = null;
+      else moving = true;
+    }
     const k = this.view.k;
     const lit = this.selected ?? this.hover?.id ?? null;
     const near = lit ? (this.neighbours.get(lit) ?? new Set<string>()) : null;
     const isLit = (id: string): boolean => !lit || id === lit || !!near?.has(id);
-    const dim = (id: string): boolean => (this.matches ? !this.matches.has(id) : false) || !isLit(id);
-    // links
-    for (const [a, b] of this.links) {
-      const on = lit && (a.id === lit || b.id === lit);
-      const pa = this.toScreen(a.x, a.y);
-      const pb = this.toScreen(b.x, b.y);
-      ctx.strokeStyle = on ? 'rgba(94,231,255,0.85)' : lit ? 'rgba(150,170,210,0.06)' : 'rgba(150,170,210,0.22)';
-      ctx.lineWidth = on ? 2 : 1;
+    const dimmed = (id: string): boolean => (this.matches ? !this.matches.has(id) : false) || !isLit(id);
+    for (const d of this.dots) {
+      d.lit = ease(d.lit, dimmed(d.id) ? 0 : 1, 9);
+      d.grow = ease(d.grow, d.id === this.selected ? 1.6 : d.id === this.hover?.id ? 1.35 : 1, 12);
+      if (d.born < 1) {
+        const b = Math.max(0, Math.min(1, (now - d.bornAt) / 420));
+        // a small overshoot, like a star popping into place
+        d.born = b >= 1 ? 1 : b;
+        moving = true;
+      }
+    }
+    const pop = (b: number): number => (b >= 1 ? 1 : b <= 0 ? 0 : 1 + 2.2 * (b - 1) ** 3 + 1.2 * (b - 1) ** 2);
+    // links: lit ones brighter and thicker
+    for (const l of this.links) {
+      const on = !!lit && (l.a.id === lit || l.b.id === lit);
+      l.lit = ease(l.lit, on ? 1 : lit ? 0 : 0.5, 9);
+      const born = Math.min(l.a.born, l.b.born);
+      if (born <= 0) continue;
+      const pa = this.toScreen(l.a.x, l.a.y);
+      const pb = this.toScreen(l.b.x, l.b.y);
+      const base = 0.07 + 0.2 * Math.min(1, l.lit * 2);
+      const a = (l.lit > 0.5 ? base + (l.lit - 0.5) * 1.4 : base) * born;
+      const outward = l.a.id === lit;
+      ctx.strokeStyle = l.lit > 0.5 ? `rgba(${outward || !lit ? OUT : IN},${a.toFixed(3)})` : `rgba(150,170,210,${a.toFixed(3)})`;
+      ctx.lineWidth = 1 + Math.max(0, l.lit - 0.5) * 2.4;
       ctx.beginPath();
       ctx.moveTo(pa.x, pa.y);
       ctx.lineTo(pb.x, pb.y);
       ctx.stroke();
     }
+    // light flowing along the selected note's links: out = cyan, in = violet
+    if (this.selected && !calm) {
+      moving = true;
+      for (const l of this.links) {
+        const out = l.a.id === this.selected;
+        if (!out && l.b.id !== this.selected) continue;
+        const pa = this.toScreen(l.a.x, l.a.y);
+        const pb = this.toScreen(l.b.x, l.b.y);
+        const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+        if (len < 8) continue;
+        const speed = 70; // px per second
+        const gap = Math.max(36, len / 3);
+        ctx.fillStyle = `rgba(${out ? OUT : IN},0.9)`;
+        for (let s = ((now / 1000) * speed) % gap; s < len; s += gap) {
+          const f = s / len;
+          ctx.beginPath();
+          ctx.arc(pa.x + (pb.x - pa.x) * f, pa.y + (pb.y - pa.y) * f, 2.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
     // dots
     for (const d of this.dots) {
+      if (d.born <= 0) continue;
       const p = this.toScreen(d.x, d.y);
-      if (p.x < -40 || p.y < -40 || p.x > w + 40 || p.y > h + 40) continue;
-      const r = Math.max(3, d.r * k * 0.9);
-      ctx.globalAlpha = dim(d.id) ? 0.22 : 1;
-      if (!dim(d.id) && !d.ghost) {
+      if (p.x < -60 || p.y < -60 || p.x > w + 60 || p.y > h + 60) continue;
+      const r = Math.max(3, d.r * k * 0.9) * d.grow * pop(d.born);
+      ctx.globalAlpha = (0.2 + 0.8 * d.lit) * Math.min(1, d.born * 2);
+      if (d.lit > 0.05 && !d.ghost) {
         const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3);
         g.addColorStop(0, d.color + '55');
         g.addColorStop(1, d.color + '00');
@@ -408,8 +503,27 @@ export class Graph2D {
       ctx.beginPath();
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx.fill();
-      if (d.id === this.focus || d.id === this.selected) {
-        ctx.strokeStyle = d.id === this.selected ? '#ffffff' : '#ffd166';
+      if (d.id === this.selected) {
+        // a bright core, a ring, and a pulse going out when it was picked
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r + 5, 0, Math.PI * 2);
+        ctx.stroke();
+        const pk = (now - this.selectAt) / 800;
+        if (pk < 1 && !calm) {
+          ctx.strokeStyle = `rgba(255,255,255,${(0.7 * (1 - pk)).toFixed(3)})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, r + 5 + easeInOut(pk) * 46, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } else if (d.id === this.focus) {
+        ctx.strokeStyle = '#ffd166';
         ctx.lineWidth = 2.5;
         ctx.beginPath();
         ctx.arc(p.x, p.y, r + 5, 0, Math.PI * 2);
@@ -424,16 +538,19 @@ export class Graph2D {
     ctx.textBaseline = 'top';
     for (const d of this.dots) {
       const show = k > 2.2 || d.id === lit || d.id === this.focus || (near?.has(d.id) ?? false) || (!lit && d.degree >= hubCut && d.degree > 1);
-      if (!show || dim(d.id)) continue;
+      if (!show || d.lit < 0.3 || d.born < 1) continue;
       const p = this.toScreen(d.x, d.y);
       if (p.x < -60 || p.y < -30 || p.x > w + 60 || p.y > h + 30) continue;
-      const r = Math.max(3, d.r * k * 0.9);
+      const r = Math.max(3, d.r * k * 0.9) * d.grow;
       const label = d.name.length > 26 ? d.name.slice(0, 25) + '…' : d.name;
+      ctx.globalAlpha = d.lit;
       ctx.lineWidth = 4;
       ctx.strokeStyle = 'rgba(7,12,26,0.9)';
       ctx.strokeText(label, p.x, p.y + r + 6);
       ctx.fillStyle = d.ghost ? '#8ea0c0' : '#e8f1ff';
       ctx.fillText(label, p.x, p.y + r + 6);
     }
+    ctx.globalAlpha = 1;
+    if (moving && this.root.isConnected) this.invalidate();
   }
 }

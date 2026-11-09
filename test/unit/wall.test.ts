@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sanitizeSavedWall, WALL_AZ, WALL_H, WALL_R, WALL_SCALE, WallGeometry, type WallSpot } from '../../src/xr/wall/wall-geometry';
+import { sanitizeSavedWall, sanitizeSavedWalls, WALL_AZ, WALL_H, WALL_R, WALL_SCALE, WallGeometry, type WallSpot } from '../../src/xr/wall/wall-geometry';
 
 const geo = new WallGeometry(0.7, 0.875);
 const O = { x: 0, y: 1.6, z: 0 };
@@ -100,5 +100,28 @@ describe('sanitizeSavedWall', () => {
       { path: 'd.md', az: -90, h: 0.1 },
     ]);
     expect(sanitizeSavedWall('nope')).toEqual([]);
+  });
+});
+
+describe('sanitizeSavedWalls', () => {
+  it('keeps valid walls and the open one', () => {
+    const w = sanitizeSavedWalls({
+      active: 'b',
+      walls: [
+        { id: 'a', name: 'A', cards: [{ path: 'x.md', az: -40, h: 0 }] },
+        { id: 'b', name: 'B', cards: 'bad' },
+      ],
+    });
+    expect(w?.active).toBe('b');
+    expect(w?.walls.map((x) => x.cards.length)).toEqual([1, 0]);
+  });
+  it('drops duplicates and falls back to the first wall', () => {
+    const w = sanitizeSavedWalls({ active: 'zz', walls: [{ id: 'a', name: 'A', cards: [] }, { id: 'a', name: 'again', cards: [] }, null] });
+    expect(w?.walls.length).toBe(1);
+    expect(w?.active).toBe('a');
+  });
+  it('returns null for an older single wall (an array) or nothing', () => {
+    expect(sanitizeSavedWalls([{ path: 'x.md', az: -40, h: 0 }])).toBeNull();
+    expect(sanitizeSavedWalls(undefined)).toBeNull();
   });
 });

@@ -146,9 +146,23 @@ async function desktop(browser) {
   await page.waitForTimeout(200);
   const card = await page.textContent('.nn-g2-card');
   check('clicking a star shows its card', (card ?? '').includes('Memory'), card ?? '');
+  await page.waitForTimeout(500);
+  const motion = await page.evaluate(() => {
+    const g = window.netnote.workspace.graph;
+    const d = g.index.get('Memory.md');
+    const r = g.root.getBoundingClientRect();
+    const p = g.screenOf('Memory.md');
+    const others = g.dots.filter((x) => x.id !== 'Memory.md' && !g.neighbours.get('Memory.md')?.has(x.id));
+    return { grow: d.grow, centred: Math.hypot(p.x - r.width / 2, p.y - r.height / 2), dimmed: others.every((x) => x.lit < 0.2) };
+  });
+  check(
+    'the picked star grows, glides to the middle, and the unrelated ones fade back',
+    motion.grow > 1.45 && motion.centred < 30 && motion.dimmed,
+    JSON.stringify(motion),
+  );
   // zoom with the wheel, around the pointer
   const k0 = await page.evaluate(() => window.netnote.workspace.graph.view.k);
-  await page.mouse.move(g2.x, g2.y);
+  await page.mouse.move(640, 400);
   await page.mouse.wheel(0, -400);
   await page.waitForTimeout(200);
   const k1 = await page.evaluate(() => window.netnote.workspace.graph.view.k);
@@ -255,6 +269,40 @@ async function immersive(browser) {
       mid.caret === 'Walking XY'.length,
     JSON.stringify(mid),
   );
+  // a long note: pinch the text and drag it up to read on (and flick it: it carries on)
+  const scrolled = await page.evaluate(async () => {
+    const { app, library } = window.netnote;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const body = Array.from({ length: 40 }, (_, i) => `Paragraph ${i + 1}: a long line of text so that the note needs scrolling.`).join('\n\n');
+    const path = await library.createNote('Long read', 'Inbox', `# Long read\n\n${body}\n`);
+    app.select(path);
+    await wait(1200);
+    const card = app.cards.find((c) => c.path === path);
+    const V = card.mesh.position.constructor;
+    const Q = card.mesh.quaternion.constructor;
+    const at = (py) => card.mesh.localToWorld(new V(0, (0.5 - py / 1250) * card.heightM, 0));
+    const hand = window.IWER_DEVICE.hands.right;
+    const from = new V(0.15, 1.35, -0.25);
+    const aimAt = (t) => {
+      hand.position.set(from.x, from.y, from.z);
+      const q = new Q().setFromUnitVectors(new V(0, 0, -1), t.clone().sub(from).normalize());
+      hand.quaternion.set(q.x, q.y, q.z, q.w);
+    };
+    aimAt(at(720));
+    await wait(400);
+    hand.updatePinchValue(1);
+    await wait(300);
+    for (let y = 720; y >= 370; y -= 35) {
+      aimAt(at(y));
+      await wait(80);
+    }
+    await wait(150);
+    const held = card.scrolled;
+    hand.updatePinchValue(0);
+    await wait(600);
+    return { held, after: card.scrolled };
+  });
+  check('pinching a long note and dragging it up scrolls the text', scrolled.held > 250, JSON.stringify(scrolled));
   await ready(page);
   const after = await page.evaluate((a) => window.netnote.library.vault.notes.get(a).raw, pair[0]);
   check('the new link survives a reload (IndexedDB)', after.includes(`[[${name}]]`));
@@ -318,6 +366,35 @@ async function wall(browser) {
   await ready(page);
   const after = await page.evaluate(() => window.netnote.app.state.wall.length);
   check('the wall comes back after a reload', after === 4, `${after} cards`);
+  // several walls: a new one starts empty and "To wall" puts the card there; the first comes back intact
+  const walls = await page.evaluate(async () => {
+    const { app } = window.netnote;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    app.newWall();
+    await wait(300);
+    const fresh = app.state.wall.length;
+    app.select('Caffeine.md');
+    app.onCard(
+      app.cards.find((c) => c.path === 'Caffeine.md'),
+      'wall',
+    );
+    await wait(300);
+    const second = [...app.state.wall];
+    app.wallBar.onAction('prev');
+    await wait(300);
+    const back = [...app.state.wall];
+    return { fresh, second, back, count: app.walls.length, open: app.wallIdx };
+  });
+  check(
+    'a new wall starts empty, "To wall" puts a card on the open wall, and switching back shows the first wall again',
+    walls.fresh === 0 && walls.second.join() === 'Caffeine.md' && walls.back.length === 4 && !walls.back.includes('Caffeine.md') && walls.count === 2,
+    JSON.stringify(walls),
+  );
+  await page.evaluate(() => window.netnote.app.wallBar.onAction('next'));
+  await page.waitForTimeout(700);
+  await ready(page);
+  const kept = await page.evaluate(() => ({ n: window.netnote.app.walls.length, open: window.netnote.app.wallIdx, wall: window.netnote.app.state.wall }));
+  check('every wall, and which one is open, survives a reload', kept.n === 2 && kept.open === 1 && kept.wall.join() === 'Caffeine.md', JSON.stringify(kept));
   check('no page errors (wall)', errors.length === 0, errors[0]);
   await ctx.close();
 }

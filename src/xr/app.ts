@@ -59,9 +59,20 @@ import { SearchPanel } from './ui/search-panel';
 import { Surface, type XRPointerEvent } from './ui/surface';
 import { PalmUp, palmFacing, palmPose, type PalmPose } from './interaction/palm';
 import type { ClusterInfo } from '../core/insights/cluster';
-import { sanitizeSavedWall, WALL_AZ, WALL_R, WALL_SCALE, WallGeometry, type SavedWallCard, type WallSpot } from './wall/wall-geometry';
+import {
+  sanitizeSavedWall,
+  sanitizeSavedWalls,
+  type SavedWalls,
+  WALL_AZ,
+  WALL_R,
+  WALL_SCALE,
+  WallGeometry,
+  type SavedWallCard,
+  type WallSpot,
+} from './wall/wall-geometry';
 import { WallView, type Ribbon } from './wall/wall-view';
 import { TAG_H, WallTag } from './wall/wall-tag';
+import { WallBar } from './wall/wall-bar';
 import { Territories } from './overview/territories';
 import { MiniMap, MINI_R } from './overview/minimap';
 import { InsightsPanel } from './ui/insights-panel';
@@ -102,6 +113,7 @@ type WriteMode =
   | { kind: 'search' }
   | { kind: 'answer'; paths: string[]; question: string }
   | { kind: 'rename'; path: string }
+  | { kind: 'wallName' }
   | { kind: 'edit'; path: string; front: string; blocks: string[]; index: number; dirty: boolean };
 
 interface WallZoom {
@@ -167,6 +179,13 @@ export class NetNoteApp {
   private wallSig = '';
   private wallLoaded = false;
   private wallSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** every thinking wall of this library; one is open (on your left) at a time */
+  walls: { id: string; name: string; cards: SavedWallCard[] }[] = [];
+  wallIdx = 0;
+  readonly wallBar = new WallBar();
+  private wallSwitching = false;
+  private wallBarConfirm = false;
+  private wallBarUntil = 0;
 
   private home: Home = { position: new Vector3(0, 1.6, 0), yaw: 0 };
   private fov: Fov = QUEST_FOV;
@@ -236,6 +255,9 @@ export class NetNoteApp {
     this.register(this.dock.mesh, true);
     for (const s of [this.composer, this.search, this.insightsPanel]) this.register(s.mesh, false);
     this.register(this.minimap.group, false);
+    this.register(this.wallBar.mesh, false);
+    this.wallBar.mesh.visible = false;
+    this.wallBar.onAction = (id) => this.onWallBar(id);
     this.insightsPanel.mesh.visible = false;
     this.insightsPanel.onAction = (id, data) => this.onInsights(id, data);
     this.minimap.onPick = (id) => this.jumpTo(id);
@@ -485,15 +507,19 @@ export class NetNoteApp {
     this.graph.update(this.world.camera, dt);
     this.followLazily(eye, quat);
     this.animateCards(dt, reduced);
-    for (const s of [this.dock, this.tools, this.composer, this.editor, this.search, this.insightsPanel, ...this.cards, ...this.tags]) s.update();
+    for (const s of [this.dock, this.tools, this.composer, this.editor, this.search, this.insightsPanel, this.wallBar, ...this.cards, ...this.tags]) s.update();
     this.hint.update();
     this.hint.tick(dt);
     if (this.composer.mesh.visible) this.composer.tick(dt);
     if (this.editor.mesh.visible) this.editor.tick(dt);
+    for (const c of this.cards) c.glide(dt);
+    this.editor.glide(dt);
+    this.insightsPanel.glide(dt);
     this.updateConnect();
     this.updatePanelDrag();
     this.updateTouchReach();
     this.updateWall(dt);
+    this.updateWallBar(dt, eye, quat);
     this.updateOverview(dt, eye, quat);
     this.lookForRoom(eye, quat);
     this.updateFlows(dt, reduced);
@@ -963,6 +989,10 @@ export class NetNoteApp {
       title = tr.renameTitle;
       context = vault.notes.get(mode.path)?.name ?? '';
       accent = this.graph.colorOf(mode.path);
+    } else if (mode.kind === 'wallName') {
+      title = tr.wallRenameTitle;
+      context = this.walls[this.wallIdx]?.name ?? '';
+      accent = COLORS.gold;
     } else if (mode.kind === 'answer') {
       title = tr.answerTitle;
       context = mode.question;
@@ -980,7 +1010,7 @@ export class NetNoteApp {
         accent,
         hint: tr.keyboardHint,
       });
-    this.input.begin(initial, render, { multiline: mode.kind !== 'reason' && mode.kind !== 'rename' });
+    this.input.begin(initial, render, { multiline: mode.kind !== 'reason' && mode.kind !== 'rename' && mode.kind !== 'wallName' });
     this.input.onSubmit = () => void this.saveComposer();
     this.input.onCancel = () => this.cancelComposer();
     render();
@@ -1176,6 +1206,13 @@ export class NetNoteApp {
           this.showCard(now, c);
         }
         this.graph.setSelected(now);
+        // the walls that are not open keep the note under its new name too
+        for (const w of this.walls) for (const c of w.cards) if (c.path === mode.path) c.path = now;
+        this.wallChanged();
+      } else if (mode.kind === 'wallName') {
+        const w = this.walls[this.wallIdx];
+        if (!text || !w) return;
+        w.name = text.slice(0, 40);
         this.wallChanged();
       } else if (mode.kind === 'answer') {
         if (!text) return;
@@ -1241,6 +1278,8 @@ export class NetNoteApp {
     this.moved.delete(card);
     this.showCard(path, card);
     this.wallChanged();
+    const name = this.walls[this.wallIdx]?.name;
+    if (name && this.walls.length > 1) this.toast(t().wallPut(name));
   }
 
   /** Take a card off the wall: it becomes a pinned card on the reading shelf. */
@@ -1400,27 +1439,50 @@ export class NetNoteApp {
 
   private wallChanged(): void {
     this.wallSig = '';
-    if (!this.wallLoaded) return;
+    if (!this.wallLoaded || this.wallSwitching) return;
+    const w = this.walls[this.wallIdx];
+    if (w) w.cards = [...this.onWall].filter(([c]) => c.path).map(([c, sp]) => ({ path: c.path!, az: +sp.az.toFixed(2), h: +sp.h.toFixed(3) }));
     if (this.wallSaveTimer) clearTimeout(this.wallSaveTimer);
     this.wallSaveTimer = setTimeout(() => {
-      const cards: SavedWallCard[] = [...this.onWall].filter(([c]) => c.path).map(([c, s]) => ({ path: c.path!, az: +s.az.toFixed(2), h: +s.h.toFixed(3) }));
-      void this.library.setState('wall', cards).catch(() => undefined);
+      const state: SavedWalls = { active: this.walls[this.wallIdx]?.id ?? '', walls: this.walls };
+      void this.library.setState('walls', state).catch(() => undefined);
     }, 400);
   }
 
-  /** Put back the wall saved with this library. */
+  /** Put back the walls saved with this library (an older single wall becomes the first one). */
   private async restoreWall(): Promise<void> {
     this.wallLoaded = false;
-    for (const c of [...this.onWall.keys()]) this.closeCard(c);
-    let saved: SavedWallCard[] = [];
+    let saved: SavedWalls | null = null;
     try {
-      saved = sanitizeSavedWall(await this.library.getState('wall'));
+      saved = sanitizeSavedWalls(await this.library.getState('walls'));
+      if (!saved) saved = { active: 'w1', walls: [{ id: 'w1', name: t().wallName(1), cards: sanitizeSavedWall(await this.library.getState('wall')) }] };
     } catch {
-      saved = [];
+      saved = null;
     }
+    this.walls = saved?.walls.length ? saved.walls : [{ id: 'w1', name: t().wallName(1), cards: [] }];
+    const at = this.walls.findIndex((w) => w.id === saved?.active);
+    if (this.library.vault) this.wall.anchor(this.home.position, this.home.yaw);
+    this.hangWall(Math.max(0, at));
+    this.wallLoaded = true;
+    this.wallSig = '';
+  }
+
+  /** Take the open wall's cards down (quietly) and hang wall `i`'s. */
+  private hangWall(i: number): void {
+    this.wallSwitching = true;
+    for (const c of [...this.onWall.keys()]) {
+      this.onWall.delete(c);
+      const k = this.cards.indexOf(c);
+      if (k >= 0) this.cards.splice(k, 1);
+      this.zoom.delete(c);
+      this.motion.delete(c);
+      this.hoveredCards.delete(c);
+      this.moved.delete(c);
+      this.retire(c);
+    }
+    this.wallIdx = Math.max(0, Math.min(this.walls.length - 1, i));
     const vault = this.library.vault;
-    if (vault) this.wall.anchor(this.home.position, this.home.yaw);
-    for (const it of saved) {
+    for (const it of this.walls[this.wallIdx]?.cards ?? []) {
       if (!vault?.notes.has(it.path)) continue;
       const card = this.newCard();
       this.onWall.set(card, this.wallGeo.clamp(it));
@@ -1429,8 +1491,74 @@ export class NetNoteApp {
       card.mesh.position.set(pose.x, pose.y, pose.z);
       card.mesh.scale.setScalar(pose.scale);
     }
-    this.wallLoaded = true;
+    this.wallSwitching = false;
+    this.wallBarConfirm = false;
     this.wallSig = '';
+  }
+
+  /** Open another wall (it hangs in the same place on your left). */
+  openWall(i: number): void {
+    const n = this.walls.length;
+    if (!n) return;
+    this.wallChanged(); // keep the one you are leaving
+    this.hangWall(((i % n) + n) % n);
+    this.wallChanged();
+    this.wallBarUntil = performance.now() + 4000;
+    this.sound.play('open', this.wallBar.mesh.position, null);
+    this.toast(t().wallOpened(this.walls[this.wallIdx]!.name));
+  }
+
+  newWall(): void {
+    this.wallChanged();
+    let n = this.walls.length + 1;
+    while (this.walls.some((w) => w.name === t().wallName(n))) n++;
+    this.walls.push({ id: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: t().wallName(n), cards: [] });
+    this.openWall(this.walls.length - 1);
+  }
+
+  private onWallBar(id: string): void {
+    if (id !== 'delete') this.wallBarConfirm = false;
+    if (id === 'prev') this.openWall(this.wallIdx - 1);
+    else if (id === 'next') this.openWall(this.wallIdx + 1);
+    else if (id === 'new') this.newWall();
+    else if (id === 'rename') this.openComposer({ kind: 'wallName' }, this.walls[this.wallIdx]?.name ?? '');
+    else if (id === 'delete') {
+      if (!this.wallBarConfirm) {
+        this.wallBarConfirm = true;
+        return;
+      }
+      this.wallBarConfirm = false;
+      if (this.walls.length > 1) {
+        this.walls.splice(this.wallIdx, 1);
+        this.hangWall(Math.min(this.wallIdx, this.walls.length - 1));
+      } else {
+        // the last wall: just clear it
+        this.walls[0]!.cards = [];
+        this.hangWall(0);
+      }
+      this.wallChanged();
+      this.toast(t().deleted);
+    }
+  }
+
+  /** The wall switcher hangs at the near end of the wall and shows while you look that way. */
+  private updateWallBar(dt: number, eye: Vector3, quat: Quaternion): void {
+    const bar = this.wallBar;
+    const wz = (angleDiff(this.wall.yaw, yawOf(quat)) * 180) / Math.PI;
+    const looking = this.immersive && wz < -12 && wz > WALL_AZ[0] - 30;
+    bar.target = looking || performance.now() < this.wallBarUntil || !!this.panelDrag ? 1 : 0;
+    bar.opacity += (bar.target - bar.opacity) * Math.min(1, dt * 6);
+    bar.mesh.visible = bar.opacity > 0.03 && !this.writing;
+    if (!bar.mesh.visible) return;
+    const w = this.walls[this.wallIdx];
+    bar.set({ name: w?.name ?? '', index: this.wallIdx, count: this.walls.length, cards: this.onWall.size, confirmDelete: this.wallBarConfirm });
+    const pose = this.wallGeo.pose(this.wall.origin, this.wall.yaw, { az: -20, h: -0.06 });
+    // a little in front of the wall line, so cards carried past never cut through it
+    const p = new Vector3(pose.x, pose.y, pose.z).lerp(this.wall.origin, 0.08);
+    bar.mesh.position.copy(p);
+    faceTowards(bar.mesh, eye);
+    bar.mesh.material.transparent = true;
+    bar.mesh.material.opacity = bar.opacity;
   }
 
   // ---------- mixed reality: the real table and wall ----------
@@ -1871,7 +1999,8 @@ export class NetNoteApp {
         // put the card you are reading on the wall (or just show where the wall is)
         const active = this.cards.find((c) => !this.pinned.has(c.path ?? '') && !this.onWall.has(c));
         if (active) this.putOnWall(active);
-        this.toast(t().wallHint);
+        this.wallBarUntil = performance.now() + 5000; // show which wall is open, and how to switch
+        if (!active || this.walls.length < 2) this.toast(t().wallHint);
         break;
       }
       case 'exit':

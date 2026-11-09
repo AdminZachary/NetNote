@@ -187,3 +187,26 @@ export function sanitizeSavedWall(raw: unknown): SavedWallCard[] {
   }
   return out;
 }
+
+export interface SavedWalls {
+  active: string;
+  walls: { id: string; name: string; cards: SavedWallCard[] }[];
+}
+
+/** Several walls saved together; null when there is nothing valid (e.g. an older single wall). */
+export function sanitizeSavedWalls(raw: unknown): SavedWalls | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { active, walls } = raw as Record<string, unknown>;
+  if (!Array.isArray(walls)) return null;
+  const ids = new Set<string>();
+  const out: SavedWalls['walls'] = [];
+  for (const w of walls) {
+    if (!w || typeof w !== 'object') continue;
+    const { id, name, cards } = w as Record<string, unknown>;
+    if (typeof id !== 'string' || !id || ids.has(id) || typeof name !== 'string') continue;
+    ids.add(id);
+    out.push({ id, name: name.slice(0, 40) || id, cards: sanitizeSavedWall(cards) });
+  }
+  if (!out.length) return null;
+  return { active: typeof active === 'string' && ids.has(active) ? active : out[0]!.id, walls: out };
+}
