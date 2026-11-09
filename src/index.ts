@@ -91,7 +91,13 @@ async function main(): Promise<void> {
   const library = new Library(await IdbStore.open());
   const sample = sampleFiles(import.meta.glob<string>('/sample-vault/**/*.{md,canvas}', { query: '?raw', import: 'default', eager: true }));
 
-  app = new NetNoteApp(world, library, { onExit: () => (workspace.hidden = false) });
+  app = new NetNoteApp(world, library, {
+    onExit: () => {
+      workspace.hidden = false;
+      // carry on with the note you were looking at inside
+      if (app?.graph.selected) void workspace.open(app.graph.selected);
+    },
+  });
 
   const open = async (id: string): Promise<void> => {
     await library.open(id);
@@ -125,10 +131,6 @@ async function main(): Promise<void> {
       app?.relabel();
       workspace.render();
       landing.render();
-    },
-    // the 3D preview behind the page: when you come back, open the note you were looking at there
-    onPreview: (on) => {
-      if (!on && app?.graph.selected) void workspace.open(app.graph.selected);
     },
     toast: (text) => landing.toast(text),
   });

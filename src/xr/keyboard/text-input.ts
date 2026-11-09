@@ -2,14 +2,16 @@
  * Text entry through the Meta Quest system keyboard (WebXR), with the same code path for a Bluetooth
  * keyboard, voice dictation (the keyboard's mic key) and a desktop keyboard.
  *
- * How it works: the text being written lives in a real (invisible) text field. Focusing it opens the
- * Quest overlay keyboard, which shows the whole text with its own cursor: you can move the cursor
- * anywhere and insert, delete or select there. We read the field's value and cursor on every change
- * and draw them on our panel, so what you see in the room matches the keyboard.
+ * Two ways the text field is used:
+ *   - In the headset, the Quest overlay keyboard keeps its own little buffer and writes it into the
+ *     field, replacing what was there. So the field never holds the note: it holds only what you are
+ *     typing now, and we splice that in at the cursor (head + typed + tail). Pinch another spot in
+ *     the text and the insertion point moves there. Nothing outside the insertion is ever touched.
+ *   - On a desktop (a physical keyboard into the hidden field) the field holds the whole text and the
+ *     browser's own cursor editing is used as is.
  *
- * Safety net: some keyboard builds replace the whole value with the first key pressed. If a single
- * keystroke wipes out a longer text, we put the text back and add the keystroke at the cursor, so
- * nothing written is ever lost.
+ * Safety net (desktop): some keyboard builds replace the whole value with the first key pressed. If a
+ * single keystroke wipes out a longer text, we put the text back and add the keystroke at the cursor.
  */
 
 export interface TextSessionState {
@@ -44,6 +46,45 @@ export function deleteWordBefore(text: string, caret: number): { text: string; c
   return { text: head + text.slice(caret), caret: head.length };
 }
 
+/**
+ * Typing into a text at an insertion point when the keyboard only knows its own buffer. `base` is what
+ * the keyboard's buffer already held when the insertion point was set (it is not inserted again).
+ */
+export class InsertSegment {
+  constructor(
+    readonly head: string,
+    readonly tail: string,
+    private base = '',
+  ) {}
+
+  static at(text: string, caret: number, base = ''): InsertSegment {
+    const c = Math.max(0, Math.min(text.length, caret));
+    return new InsertSegment(text.slice(0, c), text.slice(c), base);
+  }
+
+  /** The keyboard's buffer is now `value` with its cursor at `sel`: the whole text and our cursor. */
+  apply(value: string, sel: number): { text: string; caret: number; typed: string } {
+    let typed: string;
+    let cursor: number;
+    if (value.startsWith(this.base)) {
+      typed = value.slice(this.base.length);
+      cursor = sel - this.base.length;
+    } else if (this.base.startsWith(value)) {
+      // backspacing into what was typed before the insertion point moved: nothing to insert here
+      this.base = value;
+      typed = '';
+      cursor = 0;
+    } else {
+      // the keyboard started a fresh buffer
+      this.base = '';
+      typed = value;
+      cursor = sel;
+    }
+    cursor = Math.max(0, Math.min(typed.length, cursor));
+    return { text: this.head + typed + this.tail, caret: this.head.length + cursor, typed };
+  }
+}
+
 export class TextInput {
   private field: HTMLTextAreaElement;
   private state: TextSessionState = { text: '', caret: 0, keyboardOpen: false };
@@ -51,6 +92,8 @@ export class TextInput {
   private active = false;
   private onKey: ((e: KeyboardEvent) => void) | null = null;
   private onSelection: (() => void) | null = null;
+  /** headset mode: where what you type goes in (null: the field holds the whole text) */
+  private segment: InsertSegment | null = null;
   /** Enter (without Shift) and Escape on a physical keyboard. */
   onSubmit: (() => void) | null = null;
   onCancel: (() => void) | null = null;
@@ -81,6 +124,7 @@ export class TextInput {
     doc.body.appendChild(this.field);
     this.field.addEventListener('input', (e) => {
       this.onTyped?.();
+      if (this.segment) return this.sync();
       const fixed = repairReplace(this.state.text, this.state.caret, this.field.value, (e as InputEvent).data ?? null);
       if (fixed) {
         this.field.value = fixed.text;
@@ -126,6 +170,7 @@ export class TextInput {
     this.active = true;
     this.multiline = multiline;
     this.listener = listener;
+    this.segment = null;
     this.field.value = initial;
     this.state = { text: initial, caret: initial.length, keyboardOpen: false };
     this.onKey = (e: KeyboardEvent): void => {
@@ -141,7 +186,7 @@ export class TextInput {
     };
     // the cursor moves without an input event (arrow keys, the keyboard's cursor, a tap in its text)
     this.onSelection = (): void => {
-      if (this.active && this.env.document.activeElement === this.field && this.field.selectionStart !== this.state.caret) this.sync();
+      if (this.active && this.env.document.activeElement === this.field) this.sync();
     };
     this.env.document.addEventListener('keydown', this.onKey);
     this.env.document.addEventListener('selectionchange', this.onSelection);
@@ -156,9 +201,20 @@ export class TextInput {
    */
   showKeyboard(): void {
     if (!this.active) return;
+    if (this.env.session()) {
+      // headset: the keyboard writes its own buffer into the field; start it empty at the cursor
+      if (!this.segment || this.env.document.activeElement !== this.field) {
+        this.segment = InsertSegment.at(this.state.text, this.state.caret);
+        this.field.value = '';
+      }
+    } else if (this.segment) {
+      this.segment = null;
+      this.field.value = this.state.text;
+    }
     const focus = (): void => {
       this.field.focus({ preventScroll: true });
-      this.field.setSelectionRange(this.state.caret, this.state.caret);
+      const c = this.segment ? this.field.value.length : this.state.caret;
+      this.field.setSelectionRange(c, c);
     };
     focus();
     const s = this.env.session();
@@ -178,7 +234,8 @@ export class TextInput {
   /** Move the cursor (e.g. pinching a spot in the text on the panel). */
   setCaret(i: number): void {
     this.state.caret = Math.max(0, Math.min(this.state.text.length, i));
-    this.field.setSelectionRange(this.state.caret, this.state.caret);
+    if (this.segment) this.segment = InsertSegment.at(this.state.text, this.state.caret, this.field.value);
+    else this.field.setSelectionRange(this.state.caret, this.state.caret);
     this.emit();
   }
 
@@ -200,7 +257,9 @@ export class TextInput {
   /** Finish and return the text. */
   end(): string {
     if (!this.active) return '';
-    const out = this.field.value;
+    if (this.segment) this.sync();
+    const out = this.segment ? this.state.text : this.field.value;
+    this.segment = null;
     this.active = false;
     this.listener = null;
     this.field.blur();
@@ -217,14 +276,24 @@ export class TextInput {
   }
 
   private setValue(text: string, caret: number): void {
-    this.field.value = text;
-    this.field.setSelectionRange(caret, caret);
+    if (this.segment) this.segment = InsertSegment.at(text, caret, this.field.value);
+    else {
+      this.field.value = text;
+      this.field.setSelectionRange(caret, caret);
+    }
     this.state.text = text;
     this.state.caret = caret;
     this.emit();
   }
 
   private sync(): void {
+    if (this.segment) {
+      const r = this.segment.apply(this.field.value, this.field.selectionStart ?? this.field.value.length);
+      this.state.text = r.text;
+      this.state.caret = r.caret;
+      this.emit();
+      return;
+    }
     this.state.text = this.field.value;
     this.state.caret = this.field.selectionStart ?? this.field.value.length;
     this.emit();

@@ -1531,16 +1531,28 @@ export class NetNoteApp {
       if (palm) this.sound.play(palmUp ? 'open' : 'close', palm.centre, null);
     }
     this.updateMapHold();
-    this.minimap.target = palmUp || this.mapPinned || this.mapHold ? 1 : 0;
-    let baseAt: Vector3 | null = null;
+    // palm away and not held: the map goes (a short grace so a wobble of the wrist does not flicker it);
+    // while both hands pinch it stays whatever the palm does, and goes soon after you let go
+    if (palmUp) this.mapLinger = 0.4;
+    else if (this.mapHold) this.mapLinger = 0.3;
+    else this.mapLinger = Math.max(0, this.mapLinger - dt);
+    const onHand = palmUp || !!this.mapHold || this.mapLinger > 0;
+    this.minimap.target = onHand || this.mapPinned ? 1 : 0;
+    const baseAt: Vector3 | null = null;
     const left = this.immersive && !palm ? this.leftHand() : null;
-    if (palmUp && palm) {
-      // the ball floats just above the middle of the palm, the projector base rests in it
-      anchor.copy(palm.centre).addScaledVector(palm.normal, MINI_R * 1.3);
-      baseAt = palm.centre.clone().addScaledVector(palm.normal, 0.012);
-      this.palmAnchor = anchor.clone();
-    } else if (palm && this.minimap.visible && this.palmAnchor && !this.mapPinned) {
-      anchor.copy(this.palmAnchor); // fading out where it was, not jumping away
+    if (onHand && palm) {
+      // it appears between your hands (where both can reach it) and stays put there
+      if (!this.mapSpot) {
+        const right = this.joints('right', ['wrist', 'middle-finger-phalanx-proximal']);
+        if (right) {
+          const r = right[0]!.clone().lerp(right[1]!, 0.55);
+          this.mapSpot = palm.centre.clone().lerp(r, 0.5);
+          this.mapSpot.y += 0.04;
+        } else this.mapSpot = palm.centre.clone().addScaledVector(palm.normal, MINI_R * 1.3);
+      }
+      anchor.copy(this.mapSpot);
+    } else if (this.mapSpot && this.minimap.visible && !this.mapPinned) {
+      anchor.copy(this.mapSpot); // fading out where it was, not jumping away
     } else if (left) anchor.copy(left).setY(left.y + 0.13);
     else {
       const side = new Vector3().crossVectors(fwd, new Vector3(0, 1, 0)).normalize();
@@ -1552,12 +1564,15 @@ export class NetNoteApp {
     this.graph.root.updateMatrixWorld();
     const headLocal = eye.clone().applyMatrix4(this.graph.root.matrixWorld.clone().invert());
     this.minimap.place(dt, anchor, this.graph.root.quaternion, this.graph.selected, headLocal, fwd, baseAt);
+    if (!this.minimap.visible && !onHand) this.mapSpot = null; // next time, where your hands are then
   }
 
   private mapPinned = false;
   private readonly palmUp = new PalmUp();
   private wasPalmUp = false;
-  private palmAnchor: Vector3 | null = null;
+  /** where the map was put when it appeared between your hands (it stays there) */
+  private mapSpot: Vector3 | null = null;
+  private mapLinger = 0;
 
   /** The left palm (centre and facing) from the tracked hand joints, or null without a left hand. */
   private leftPalm(): PalmPose | null {
@@ -1594,13 +1609,14 @@ export class NetNoteApp {
   }
 
   /**
-   * Holding the map in both hands: a pinch that starts on the ball (within a few cm) takes hold of it.
+   * Holding the map in both hands: while it is out, a pinch made near it (within arm's reach) takes
+   * hold of it.
    * With both hands holding, turning the line between your hands turns the big graph the same way, and
    * changing their distance zooms it, about its centre. Rotation follows the hands one to one; zoom
    * is the ratio of hand distances, so it feels like stretching the map itself.
    */
   private updateMapHold(): void {
-    const reach = MINI_R * 1.8;
+    const reach = 0.45; // both hands pinching anywhere near the map work it
     const centre = this.minimap.group.position;
     for (const h of ['left', 'right'] as const) {
       const st = this.pinches[h];
@@ -1653,7 +1669,7 @@ export class NetNoteApp {
   private atMap(e: XRPointerEvent): boolean {
     if (!this.minimap.visible || isScreenPointer(e)) return false;
     const p = e.pointerPosition;
-    return this.minimap.group.position.distanceTo(new Vector3(p.x, p.y, p.z)) < MINI_R * 2.6;
+    return this.minimap.group.position.distanceTo(new Vector3(p.x, p.y, p.z)) < 0.45;
   }
 
   private touchOn = { left: true, right: true };

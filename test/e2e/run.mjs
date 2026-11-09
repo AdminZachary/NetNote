@@ -131,41 +131,31 @@ async function desktop(browser) {
   await page.waitForTimeout(300);
   check('edits made in the headset appear here', (await page.inputValue('[data-testid=ws-text]')).includes('Added in the headset.'));
 
-  // the 3D preview is still there behind the page
+  // the star map here is a flat 2D map (the 3D one is for the headset)
   await page.click('[data-testid=ws-graph]');
-  // the edits above re-laid the graph out: let the stars settle, then click the one nearest to you
-  await page.waitForFunction(
-    () => {
-      const { app } = window.netnote;
-      const p = app.graph.worldPos('Memory.md').clone();
-      const last = window.__lastMemory;
-      window.__lastMemory = p;
-      return last && last.distanceTo(p) < 1e-4;
-    },
-    null,
-    { timeout: 15000, polling: 300 },
-  );
-  const pick = await page.evaluate(() => {
-    const { app, world } = window.netnote;
-    const cam = world.camera.position;
-    const best = app.graph.nodes
-      .filter((n) => !n.ghost && !n.file)
-      .map((n) => ({ id: n.id, p: app.graph.worldPos(n.id) }))
-      .filter((o) => {
-        const s = o.p.clone().project(world.camera);
-        return Math.abs(s.x) < 0.8 && s.y < 0.6 && s.y > -0.8 && s.z < 1;
-      })
-      .sort((a, b) => a.p.distanceTo(cam) - b.p.distanceTo(cam))[0];
-    const s = best.p.clone().project(world.camera);
-    return { id: best.id, name: window.netnote.library.vault.notes.get(best.id).name, x: ((s.x + 1) / 2) * innerWidth, y: ((1 - s.y) / 2) * innerHeight };
-  });
-  await page.mouse.click(pick.x, pick.y);
-  await page.waitForTimeout(800);
-  const s = await state(page);
-  check('"Graph" shows the 3D preview; clicking a star opens its card', s.cards[0] === pick.id, `${pick.id} → ${JSON.stringify(s.cards)}`);
-  await page.click('[data-testid=ws-graph]');
+  await page.waitForSelector('[data-testid=graph2d] canvas', { state: 'visible' });
   await page.waitForTimeout(300);
-  check('back in the workspace, the note you picked there is open', (await page.inputValue('[data-testid=ws-title]')) === pick.name);
+  const g2 = await page.evaluate(() => {
+    const g = window.netnote.workspace.graph;
+    const r = g.root.getBoundingClientRect();
+    const p = g.screenOf('Memory.md');
+    return { w: r.width, h: r.height, x: r.left + p.x, y: r.top + p.y, inside: p.x > 0 && p.y > 0 && p.x < r.width && p.y < r.height };
+  });
+  check('"Graph" shows a flat 2D star map filling the page', g2.w > 700 && g2.h > 500 && g2.inside, JSON.stringify(g2));
+  await page.mouse.click(g2.x, g2.y);
+  await page.waitForTimeout(200);
+  const card = await page.textContent('.nn-g2-card');
+  check('clicking a star shows its card', (card ?? '').includes('Memory'), card ?? '');
+  // zoom with the wheel, around the pointer
+  const k0 = await page.evaluate(() => window.netnote.workspace.graph.view.k);
+  await page.mouse.move(g2.x, g2.y);
+  await page.mouse.wheel(0, -400);
+  await page.waitForTimeout(200);
+  const k1 = await page.evaluate(() => window.netnote.workspace.graph.view.k);
+  check('the scroll wheel zooms the 2D map', k1 > k0 * 1.2, `${k0.toFixed(2)} → ${k1.toFixed(2)}`);
+  await page.click('[data-testid=g2-open]');
+  await page.waitForTimeout(300);
+  check('"Open" goes back to the note', (await page.inputValue('[data-testid=ws-title]')) === 'Memory' && !(await page.isVisible('[data-testid=graph2d]')));
   check('no page errors (desktop)', errors.length === 0, errors[0]);
   await page.close();
 }
@@ -229,6 +219,42 @@ async function immersive(browser) {
   const name = pair[1].replace(/\.md$/, '');
   check('the link and its reason are written into the note', raw.includes(`[[${name}]] — both are about retrieval`));
 
+  // the headset keyboard writes its own buffer into the text field (replacing it): typing in the
+  // middle of a paragraph must insert there, not wipe the paragraph
+  const mid = await page.evaluate(async () => {
+    const a = window.netnote.app;
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    a.select('Walking.md');
+    await wait(300);
+    const c = a.cards[0];
+    c.repaint();
+    const r = c.regionCenter('edit');
+    c.clickAt(r.x, r.y);
+    const e = a.editor;
+    e.repaint();
+    const b = e.regionCenter('block', '1');
+    e.clickAt(b.x, b.y);
+    a.input.setText('Walking clears the head.');
+    a.input.setCaret('Walking'.length);
+    a.input.showKeyboard();
+    const f = a.input.field;
+    const out = [];
+    for (const v of [' X', ' XY', ' XYZ', ' XY']) {
+      f.value = v;
+      f.setSelectionRange(v.length, v.length);
+      f.dispatchEvent(new window.Event('input', { bubbles: true }));
+      out.push(a.input.text);
+    }
+    const caret = a.input.caret;
+    a.closeEditor?.();
+    return { out, caret };
+  });
+  check(
+    'typing in the middle of a paragraph in the headset inserts there (backspace too), never clearing it',
+    mid.out.join('|') === 'Walking X clears the head.|Walking XY clears the head.|Walking XYZ clears the head.|Walking XY clears the head.' &&
+      mid.caret === 'Walking XY'.length,
+    JSON.stringify(mid),
+  );
   await ready(page);
   const after = await page.evaluate((a) => window.netnote.library.vault.notes.get(a).raw, pair[0]);
   check('the new link survives a reload (IndexedDB)', after.includes(`[[${name}]]`));
@@ -650,6 +676,12 @@ async function handsDirect(browser) {
       else left.quaternion.set(0, 0, 0, 1);
       void s;
     }, up);
+  // the right hand held out to the right, relaxed
+  await page.evaluate(() => {
+    const right = window.IWER_DEVICE.hands.right;
+    right.position.set(0.16, 1.2, -0.35);
+    right.quaternion.set(0, 0, 0, 1);
+  });
   await palm(false);
   await page.waitForTimeout(800);
   const before = await page.evaluate(() => window.netnote.app.minimap.visible);
@@ -659,9 +691,25 @@ async function handsDirect(browser) {
     const { app } = window.netnote;
     const m = app.minimap.group.position;
     const h = window.IWER_DEVICE.hands.left.position;
-    return { visible: app.minimap.visible, gap: Math.hypot(m.x - h.x, m.z - h.z), above: m.y - h.y };
+    const r = window.IWER_DEVICE.hands.right.position;
+    return { visible: app.minimap.visible, x: m.x, lx: h.x, rx: r.x, ahead: Math.abs(m.z - (h.z + r.z) / 2) };
   });
-  check('turning the left palm up brings the map onto it', !before && shown.visible && shown.gap < 0.12, JSON.stringify(shown));
+  check(
+    'turning the left palm up brings the map up between the hands',
+    !before && shown.visible && shown.x > Math.min(shown.lx, shown.rx) && shown.x < Math.max(shown.lx, shown.rx) && shown.ahead < 0.2,
+    JSON.stringify(shown),
+  );
+  // once up, it stays where it appeared (it does not chase the hand)
+  const still = await page.evaluate(async () => {
+    const { app } = window.netnote;
+    const a = app.minimap.group.position.clone();
+    const left = window.IWER_DEVICE.hands.left;
+    left.position.set(left.position.x - 0.06, left.position.y, left.position.z);
+    await new Promise((res) => setTimeout(res, 400));
+    left.position.set(left.position.x + 0.06, left.position.y, left.position.z);
+    return app.minimap.group.position.distanceTo(a);
+  });
+  check('the map stays fixed where it appeared', still < 0.01, `${still.toFixed(3)} m`);
   // hold the map in both hands: pinch at its left and right edges, then pull apart and turn
   const hold = await page.evaluate(async () => {
     const { app } = window.netnote;
@@ -715,18 +763,28 @@ async function handsDirect(browser) {
     }
     const s1 = app.graph.root.scale.x;
     const turned = app.graph.root.quaternion.angleTo(q0);
+    // still pinching: turning the palm away does not put the map away
+    hands.left.quaternion.set(0, 0, 0, 1);
+    await wait(700);
+    const keptWhileHeld = app.minimap.visible && app.minimap.held;
     hands.left.updatePinchValue(0);
     hands.right.updatePinchValue(0);
-    await wait(300);
-    return { held, s0, s1, turned, after: app.minimap.held, visible: app.minimap.visible };
+    // it fades out within a second or so (frames are slow in the emulator: poll)
+    for (let i = 0; i < 20 && app.minimap.visible; i++) await wait(150);
+    return { held, s0, s1, turned, keptWhileHeld, after: app.minimap.held, goneAfter: !app.minimap.visible };
   });
   check(
     'pinching the map with both hands takes hold of it; pulling apart zooms and turning turns the big graph',
     hold.held && hold.s1 > hold.s0 * 1.4 && hold.turned > 0.15 && !hold.after,
     `zoom ×${(hold.s1 / hold.s0).toFixed(2)}, turned ${((hold.turned * 180) / Math.PI).toFixed(0)}°`,
   );
+  check('while both hands still pinch, the map stays even with the palm turned away', hold.keptWhileHeld);
+  check('letting go with the palm turned away puts the map away', hold.goneAfter, JSON.stringify(hold));
+  await palm(true);
+  await page.waitForTimeout(1000);
+  check('palm up again brings it back', await page.evaluate(() => window.netnote.app.minimap.visible));
   await palm(false);
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(2200);
   check('turning the palm back puts the map away', !(await page.evaluate(() => window.netnote.app.minimap.visible)));
   check('no page errors (hands)', errors.length === 0, errors[0]);
   await ctx.close();

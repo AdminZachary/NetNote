@@ -1,5 +1,5 @@
 /**
- * 3D force-directed layout of the note graph.
+ * Force-directed layout of the note graph: 3D for the room, 2D for the flat map in the browser.
  *
  * Deterministic: start positions come from a hash of the note path, so the same vault always opens in
  * the same shape and people can rely on spatial memory ("the sleep notes are top left").
@@ -23,6 +23,8 @@ export interface LayoutOptions {
   ticks?: number;
   /** Previous positions, to keep the shape stable when notes are added. */
   previous?: Map<string, { x: number; y: number; z: number }>;
+  /** 3 for the room (default), 2 for a flat map (z stays 0) */
+  dims?: 2 | 3;
 }
 
 export function hash01(s: string, salt = 0): number {
@@ -78,20 +80,21 @@ function topicForce(strength: number): ((alpha: number) => void) & { initialize:
 
 /** Lay the graph out; returns positions in "layout units" (the scene scales them to metres). */
 export function layoutGraph(input: LayoutNode[], links: LayoutLink[], opts: LayoutOptions = {}): Map<string, { x: number; y: number; z: number }> {
+  const flat = opts.dims === 2;
   const nodes = input.map((n) => {
     const prev = opts.previous?.get(n.id);
     return {
       ...n,
       x: prev?.x ?? (hash01(n.id, 1) - 0.5) * 300,
       y: prev?.y ?? (hash01(n.id, 2) - 0.5) * 300,
-      z: prev?.z ?? (hash01(n.id, 3) - 0.5) * 220,
+      z: flat ? 0 : (prev?.z ?? (hash01(n.id, 3) - 0.5) * 220),
     };
   });
   const ids = new Set(nodes.map((n) => n.id));
   const simLinks = links.filter((l) => ids.has(l.source) && ids.has(l.target)).map((l) => ({ ...l }));
   const degree = new Map(nodes.map((n) => [n.id, n.degree]));
   const big = nodes.length > 800;
-  const sim = forceSimulation(nodes, 3)
+  const sim = forceSimulation(nodes, flat ? 2 : 3)
     .randomSource(seeded(nodes.length * 7919 + simLinks.length))
     .force(
       'link',
@@ -116,13 +119,13 @@ export function layoutGraph(input: LayoutNode[], links: LayoutLink[], opts: Layo
     .force('collide', big ? null : forceCollide<LayoutNode>((d) => nodeRadius(d) + 4))
     .force('x', forceX<LayoutNode>(0).strength(0.04))
     .force('y', forceY<LayoutNode>(0).strength(0.04))
-    .force('z', forceZ<LayoutNode>(0).strength(0.04))
+    .force('z', flat ? null : forceZ<LayoutNode>(0).strength(0.04))
     .alphaDecay(big ? 0.05 : 0.025)
     .velocityDecay(0.35)
     .alpha(opts.previous ? 0.4 : 1)
     .stop();
   sim.tick(opts.ticks ?? Math.max(60, Math.min(300, Math.round(60000 / Math.max(1, nodes.length)))));
-  return new Map(nodes.map((n) => [n.id, { x: n.x ?? 0, y: n.y ?? 0, z: n.z ?? 0 }]));
+  return new Map(nodes.map((n) => [n.id, { x: n.x ?? 0, y: n.y ?? 0, z: flat ? 0 : (n.z ?? 0) }]));
 }
 
 /** Centre and radius of a set of positions (radius = 90th percentile distance, so outliers don't shrink everything). */

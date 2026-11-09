@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deleteWordBefore, repairReplace } from '../../src/xr/keyboard/text-input';
+import { InsertSegment, deleteWordBefore, repairReplace } from '../../src/xr/keyboard/text-input';
 import { caretFromX, caretSpot, layoutText, scrollForCaret } from '../../src/xr/ui/text-layout';
 
 const ctx = { measureText: (s: string) => ({ width: s.length * 10 }) } as unknown as CanvasRenderingContext2D;
@@ -42,5 +42,30 @@ describe('text layout with offsets', () => {
     const l = layoutText(ctx, t, 30);
     expect(l.map((x) => x.text)).toEqual(['知识图', '谱', '', '记忆']);
     expect(caretSpot(ctx, l, t, 5)).toEqual({ line: 2, x: 0 });
+  });
+});
+
+describe('typing in the headset (the keyboard only knows its own buffer)', () => {
+  it('inserts what you type at the cursor and never touches the rest', () => {
+    const seg = InsertSegment.at('hello world', 5);
+    expect(seg.apply('', 0)).toMatchObject({ text: 'hello world', caret: 5 });
+    expect(seg.apply(',', 1)).toMatchObject({ text: 'hello, world', caret: 6 });
+    expect(seg.apply(', big', 5)).toMatchObject({ text: 'hello, big world', caret: 10 });
+    // the keyboard's own cursor moved inside the typed part
+    expect(seg.apply(', big', 2)).toMatchObject({ caret: 7 });
+    // backspacing all of it puts the text back as it was
+    expect(seg.apply('', 0)).toMatchObject({ text: 'hello world', caret: 5 });
+  });
+  it('after moving the insertion point, what the keyboard already held is not inserted again', () => {
+    const seg = InsertSegment.at('one two', 0, 'abc');
+    expect(seg.apply('abc', 3)).toMatchObject({ text: 'one two', caret: 0 });
+    expect(seg.apply('abcX', 4)).toMatchObject({ text: 'Xone two', caret: 1 });
+    // the keyboard cleared its buffer and started again
+    expect(seg.apply('Y', 1)).toMatchObject({ text: 'Yone two', caret: 1 });
+  });
+  it('backspacing into the old buffer inserts nothing here', () => {
+    const seg = InsertSegment.at('one two', 3, 'abc');
+    expect(seg.apply('ab', 2)).toMatchObject({ text: 'one two', caret: 3 });
+    expect(seg.apply('abZ', 3)).toMatchObject({ text: 'oneZ two', caret: 4 });
   });
 });

@@ -24,7 +24,7 @@ Built with Meta's [Immersive Web SDK](https://github.com/facebook/immersive-web-
 | **Write** | New idea, rename, delete, and *Edit*: the note opens block by block (paragraphs, headings, lists); pick a block, change it, add one below or remove it, then save. Pinch anywhere in the text to put the cursor there. Text comes from the Meta Quest system keyboard (including the surface keyboard on your desk), voice dictation or a Bluetooth keyboard. |
 | **Think on the wall** | Put cards on the *thinking wall* on your left. Cards placed side by side form a group; the group tells you what they share, which note seems to be missing (pinch it to bring it in) and asks a question. *Write an answer* creates a note linked to the whole group. The wall is saved. |
 | **Ask** | *Insights*: hidden links, questions between topics, topics and bridges, unwritten notes, drifting notes. Each row lights up on the graph and offers one action. |
-| **Navigate** | *Map in hand*: turn your left palm towards you and a 15 cm holographic copy of the graph appears on it; turn it back and the map goes away. Pinch it with both hands at once: turn your hands to turn it, pull them apart or together to zoom; the big graph follows. Point at a note and pinch: the big graph turns it round to face you. *Find* searches notes and `#tags`. |
+| **Navigate** | *Map in hand*: turn your left palm towards you and a 15 cm holographic copy of the graph appears between your hands and stays put there. Pinch it with both hands at once: turn your hands to turn it, pull them apart or together to zoom; the big graph follows. While you still pinch it the map stays, whatever your palm does; let go with the palm turned away and it goes. Point at a note and pinch: the big graph turns it round to face you. *Find* searches notes and `#tags`. |
 | **Explore** | *Path to…* on a card, then pinch another note: the shortest chain of links lights up and flows gold. *More → Tour* walks along your links on its own; *More → Time* replays how your notes were born, one by one. |
 | **Feel it** | Data flows along the links of the note you read (cyan out, violet in), a thread ties each card to its star, cards glide and grow in. Spatial sound comes from where things happen, with light controller haptics. *More → Motion* (or the system's reduce-motion setting) turns animation off. |
 | **Mochi** | A small companion beside the card you read that notices things: two notes that seem related (and why), a question between topics. A gold badge counts what it found; its bubble has *Show*, *Connect* and *Not related*; a poke brings the next one; it falls asleep when you are away and steps aside while you write. *More → Mochi* turns it off. |
@@ -117,8 +117,9 @@ and gesture rule lives in a pure function with a unit test.
 
 WebXR has no text field of its own. NetNote focuses a hidden text field, which makes the Quest
 browser show its system keyboard over the immersive scene (the session becomes `visible-blurred`
-meanwhile). The whole text is handed to the keyboard with the cursor where you left it, so you can
-move the cursor with the keyboard, or pinch a spot in the text, and type or delete there. Voice
+meanwhile). Inside the headset the system keyboard keeps its own buffer and writes it back whole, so
+NetNote opens it empty at the cursor and splices what you type into the text there: pinch a spot in
+the middle of a paragraph and type or backspace, and the rest of the paragraph stays as it was. Voice
 dictation, Bluetooth keyboards and the Quest 3 surface keyboard (type on your desk) work through the
 same path; while you type, hand presses are ignored for a moment so fingers on the desk press nothing.
 
@@ -136,7 +137,7 @@ writing workspace: notes on the left, the note in the middle (write or read), it
 right (links to, linked from, mentions that are not links yet, possibly related, each one click to
 connect). Typing `[[` offers notes to link. Changes save by themselves; Ctrl/Cmd+S saves at once.
 These are real text fields, so the Quest 3 surface keyboard, Bluetooth keyboards and voice all work.
-*Graph* shows the live 3D preview behind the page; *Library* imports, exports and switches libraries.
+*Graph* shows a flat 2D star map of the library (drag to pan, scroll or pinch to zoom, click a star for its card, double-click or *Open* to read it; search dims everything that does not match); *Library* imports, exports and switches libraries.
 
 ---
 
@@ -151,8 +152,8 @@ NetNote 是一款 VR 原生笔记应用：把 Markdown / Obsidian 笔记摊在�
   `https://电脑IP:8081/`，选择继续访问，点「进入 VR」或「进入混合现实」。
 - **在头显里**：捏星星阅读；在空白处捏住移动整个房间，双手拉开缩放；捏住一颗星拖到另一颗上连线，
   并用 Quest 键盘或语音写下原因；左手边是思考墙，并排放的卡片成为一组，会告诉你共同话题、缺的那篇和一个问题；
-  「洞察」列出隐藏联系、值得追问、还没写的笔记和漂流的笔记；左手掌心朝向自己即出现「手中地图」，翻回去就收起，双手同时捏住它即可旋转和缩放，大星图同步，指一下某颗星就把它转到面前；卡片上「编辑」可按段落修改，捏文字任意处即可在光标处插入或删改；悬浮菜单栏可直接用手指点；
-  不进 VR 时是 2D 写作台：左边笔记列表，中间写或读，右边是它的联系，输入 [[ 会提示可链接的笔记，自动保存，可以用 Quest 桌面键盘输入；
+  「洞察」列出隐藏联系、值得追问、还没写的笔记和漂流的笔记；左手掌心朝向自己，「手中地图」出现在双手之间并固定在那里；双手同时捏住它即可旋转和缩放，大星图同步，捏着的时候掌心转开也不会消失，松手且掌心转开后收起；指一下某颗星就把它转到面前；卡片上「编辑」可按段落修改，捏文字任意处即可在光标处插入或删改；悬浮菜单栏可直接用手指点；
+  不进 VR 时是 2D 写作台：左边笔记列表，中间写或读，右边是它的联系，输入 [[ 会提示可链接的笔记，自动保存，可以用 Quest 桌面键盘输入；「星图」是平面 2D 图，拖动平移、滚轮或双指缩放、点选查看、双击打开；
   混合现实下星图会放到你的真实桌面上，思考墙贴在左侧真实的墙前。
 - **数据**：都存在浏览器里（IndexedDB），可在入口页导入 zip/文件夹、导出 zip。
 - **探索**：卡片上「找路径」再捏另一颗星，显示最短链接路径；「更多」里有漫游、时光机、声音、动效、糯糯（陪伴小精灵，只在左下余光处，不挡视线）。

@@ -244,8 +244,10 @@ const en = {
   wsHint: 'Type [[ to link a note · Ctrl+S saves · works with the Quest surface keyboard',
   wsLinkPick: 'Link to…',
   wsBackToNotes: 'Notes',
-  wsExitPreview: 'Back to notes',
   wsConnected: 'Connected',
+  g2Help: 'Drag to move · scroll or pinch to zoom · click a note',
+  g2Links: (n: number) => `${n} link${n === 1 ? '' : 's'}`,
+  g2Open: 'Open',
 };
 
 type Dict = typeof en;
@@ -477,8 +479,10 @@ const zh: Dict = {
   wsHint: '输入 [[ 链接笔记 · Ctrl+S 保存 · 支持 Quest 桌面键盘',
   wsLinkPick: '链接到…',
   wsBackToNotes: '笔记',
-  wsExitPreview: '回到笔记',
   wsConnected: '已连接',
+  g2Help: '拖动移动 · 滚轮或双指缩放 · 点选笔记',
+  g2Links: (n: number) => `${n} 个链接`,
+  g2Open: '打开',
 };
 
 const DICTS: Record<Locale, Dict> = { en, zh };

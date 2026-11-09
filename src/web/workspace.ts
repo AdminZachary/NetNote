@@ -14,6 +14,7 @@ import { getLocale, t } from '../app/i18n';
 import type { Library } from '../app/library';
 import { insightRows } from '../app/insight-rows';
 import type { NoteView } from '../core/vault/vault';
+import { GRAPH2D_CSS, Graph2D } from './graph2d';
 import { completeLink, linkQueryAt, markdownToHtml } from './markdown-html';
 
 export interface WorkspaceDeps {
@@ -23,17 +24,15 @@ export interface WorkspaceDeps {
   /** show / hide the library drawer (import, export, switch library) */
   toggleLibrary(): void;
   onLocale(): void;
-  /** the 3D preview behind the page was asked for (true) or put away (false) */
-  onPreview(on: boolean): void;
   toast(text: string): void;
 }
 
 const CSS = `
 .nn-ws{position:fixed;inset:0;display:grid;grid-template-rows:auto 1fr;background:#070c1a;color:#e8f1ff;z-index:5;
   font:17px/1.65 "Inter","Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
-.nn-ws.nn-preview{background:transparent;pointer-events:none}
-.nn-ws.nn-preview .nn-body{display:none}
-.nn-ws.nn-preview .nn-top{pointer-events:auto;background:rgba(7,12,26,.82);backdrop-filter:blur(12px)}
+.nn-ws .nn-g2{display:none}
+.nn-ws.nn-graphing .nn-main,.nn-ws.nn-graphing .nn-side{display:none}
+.nn-ws.nn-graphing .nn-g2{display:block;grid-column:2 / span 2;grid-row:1 / span 2}
 .nn-ws.nn-off{display:none}
 .nn-top{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid rgba(94,231,255,.16);min-height:64px;box-sizing:border-box;flex-wrap:wrap}
 .nn-brand{font-weight:800;font-size:20px;letter-spacing:.02em;background:linear-gradient(90deg,#5ee7ff,#b18cff);-webkit-background-clip:text;background-clip:text;color:transparent;margin-right:6px}
@@ -101,7 +100,7 @@ const CSS = `
 @media (max-width:1100px){.nn-body{grid-template-columns:260px minmax(0,1fr)}.nn-side{grid-column:2;border-left:0;border-top:1px solid rgba(94,231,255,.12)}
   .nn-main{grid-row:1}.nn-body{grid-template-rows:auto auto;overflow:auto;align-content:start}.nn-col{overflow:visible;min-height:auto}
   .nn-doc,.nn-pick{flex:none}.nn-text{flex:none;height:56vh}.nn-list{grid-row:1 / span 2;overflow:auto;max-height:calc(100vh - 64px);position:sticky;top:0}}
-@media (max-width:720px){.nn-body{grid-template-columns:minmax(0,1fr)}.nn-title{flex-basis:100%;font-size:22px}.nn-bar .nn-status{text-align:left;flex:1}.nn-list{border-right:0}.nn-side{grid-column:1}
+@media (max-width:720px){.nn-ws.nn-graphing .nn-list{display:none}.nn-ws.nn-graphing .nn-g2{grid-column:1}.nn-body{grid-template-columns:minmax(0,1fr)}.nn-title{flex-basis:100%;font-size:22px}.nn-bar .nn-status{text-align:left;flex:1}.nn-list{border-right:0}.nn-side{grid-column:1}
   .nn-list{grid-row:auto;position:static;max-height:none}
   .nn-ws[data-pane=list] .nn-main,.nn-ws[data-pane=list] .nn-side{display:none}.nn-ws[data-pane=note] .nn-list{display:none}
   .nn-top{gap:8px;padding:8px 12px}.nn-search{order:9;flex-basis:100%;max-width:none}.nn-spacer{display:none}
@@ -125,7 +124,8 @@ export class Workspace {
   private saving = false;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private confirmDelete = false;
-  private preview = false;
+  private graphing = false;
+  readonly graph: Graph2D;
   private els: {
     search: HTMLInputElement;
     list: HTMLDivElement;
@@ -146,7 +146,7 @@ export class Workspace {
   ) {
     const doc = host.ownerDocument;
     const style = doc.createElement('style');
-    style.textContent = CSS;
+    style.textContent = CSS + GRAPH2D_CSS;
     doc.head.appendChild(style);
     this.root = doc.createElement('div');
     this.root.className = 'nn-ws';
@@ -158,7 +158,9 @@ export class Workspace {
     const list = this.div('nn-col nn-list');
     const main = this.div('nn-col nn-main');
     const side = this.div('nn-col nn-side');
-    body.append(list, main, side);
+    this.graph = new Graph2D(deps.library);
+    this.graph.onOpen = (id) => void this.openFromGraph(id);
+    body.append(list, main, side, this.graph.root);
     const search = doc.createElement('input');
     search.className = 'nn-search';
     search.type = 'search';
@@ -166,6 +168,7 @@ export class Workspace {
     search.addEventListener('input', () => {
       this.query = search.value;
       this.renderList();
+      if (this.graphing) this.syncGraph();
     });
     this.els = { search, list, main, side, top };
     this.root.append(top, body);
@@ -174,6 +177,7 @@ export class Workspace {
     lib.on('opened', () => {
       this.current = null;
       this.render();
+      if (this.graphing) this.syncGraph();
     });
     lib.on('changed', () => this.onLibraryChanged());
     lib.on('insights', () => this.renderSide());
@@ -204,6 +208,7 @@ export class Workspace {
 
   /** Open a note in the middle (saving the one being written first). */
   async open(path: string | null): Promise<void> {
+    if (this.graphing && path) this.setGraph(false);
     if (path === this.current) return;
     await this.saveNow();
     this.current = path;
@@ -225,7 +230,8 @@ export class Workspace {
     this.els.search.placeholder = tr.wsSearch;
     this.els.search.setAttribute('aria-label', tr.wsSearch);
     const add = this.button(tr.wsNew, () => void this.newNote(), 'nn-primary', 'ws-new');
-    const graph = this.button(this.preview ? tr.wsExitPreview : tr.wsGraph, () => this.setPreview(!this.preview), this.preview ? 'nn-on' : '', 'ws-graph');
+    const graph = this.button(tr.wsGraph, () => this.setGraph(!this.graphing), this.graphing ? 'nn-on' : '', 'ws-graph');
+    graph.setAttribute('aria-pressed', String(this.graphing));
     const libBtn = this.button(tr.wsLibrary, () => this.deps.toggleLibrary(), '', 'ws-library');
     const lang = this.button(getLocale() === 'zh' ? 'EN' : '中文', () => this.deps.onLocale(), 'nn-small', 'language');
     const vr = this.button(tr.enterVR, () => this.deps.enter('vr'), 'nn-primary', 'enter-vr');
@@ -236,12 +242,44 @@ export class Workspace {
     top.append(brand, back, this.els.search, add, this.div('nn-spacer'), graph, libBtn, lang, vr, ar);
   }
 
-  private setPreview(on: boolean): void {
-    this.preview = on;
+  /** Show the star map (a flat 2D map here; the 3D one is for the headset) in place of the note. */
+  setGraph(on: boolean): void {
+    this.graphing = on;
     if (on) void this.saveNow();
-    this.root.classList.toggle('nn-preview', on);
-    this.deps.onPreview(on);
+    this.root.classList.toggle('nn-graphing', on);
     this.renderTop();
+    if (on) {
+      this.root.dataset.pane = 'note';
+      this.syncGraph();
+      if (this.current) this.graph.centreOn(this.current);
+    }
+  }
+
+  get graphShown(): boolean {
+    return this.graphing;
+  }
+
+  private syncGraph(): void {
+    const vault = this.deps.library.vault;
+    const q = this.query.trim();
+    this.graph.focus = this.current;
+    this.graph.matches = q && vault ? new Set(vault.search(q, 200).map((h) => h.path)) : null;
+    this.graph.refresh();
+  }
+
+  private async openFromGraph(id: string): Promise<void> {
+    const vault = this.deps.library.vault;
+    if (!vault) return;
+    this.setGraph(false);
+    if (vault.notes.has(id)) {
+      await this.open(id);
+      return;
+    }
+    // an unwritten note (a link to nothing yet): write it now
+    const name = vault.graph().nodes.find((n) => n.id === id)?.name ?? id;
+    const path = await this.deps.library.createNote(name.replace(/\.md$/i, ''), '', `# ${name}\n\n`);
+    this.mode = 'edit';
+    await this.open(path);
   }
 
   // ---------- notes list ----------
@@ -412,6 +450,7 @@ export class Workspace {
   private onLibraryChanged(): void {
     const vault = this.deps.library.vault;
     if (this.current && !vault?.notes.has(this.current)) this.current = null;
+    if (this.graphing) this.syncGraph();
     this.renderList();
     this.renderSide();
     const note = this.current ? vault?.notes.get(this.current) : undefined;
