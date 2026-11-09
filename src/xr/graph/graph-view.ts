@@ -301,12 +301,12 @@ export class GraphView {
     this.pickMesh.computeBoundingSphere();
 
     // links: a cylinder from s to t, constant width in the world whatever the graph scale. With nothing
-    // selected the whole web is the picture, so links are wider (~5–6 mm, clearly visible at 1.5 m
-    // on a Quest 3 panel) but stay translucent, glass-like; once a note is selected the rest steps
+    // selected the whole web is the picture, so links are a little wider (~4 mm, a quarter more than
+    // when a note is selected) and stay translucent, glass-like; once a note is selected the rest steps
     // back and its own links stand out.
     const scale = this.root.getWorldScale(tmpV2).x || 1;
     const calm = !dimOthers;
-    const radius = (this.style.passthrough ? (calm ? 0.0032 : 0.0022) : calm ? 0.0027 : 0.0016) / scale;
+    const radius = (this.style.passthrough ? (calm ? 0.0027 : 0.0022) : calm ? 0.002 : 0.0016) / scale;
     for (let k = 0; k < this.links.length; k++) {
       const l = this.links[k]!;
       const a = this.positions[l.s]!;

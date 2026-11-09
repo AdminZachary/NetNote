@@ -9,7 +9,10 @@
  *   ask    the thinking wall and the insight prompts suggest what to look at next
  */
 import {
+  AdditiveBlending,
   BackSide,
+  Color,
+  ShaderMaterial,
   createSystem,
   XRPlane,
   BufferGeometry,
@@ -130,6 +133,23 @@ export interface AppOptions {
   /** called when the user asks to leave the immersive session */
   onExit?: () => void;
 }
+
+const RAY_VERT = `
+  varying float vT;
+  void main() {
+    vT = -position.z;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+const RAY_FRAG = `
+  uniform float opacity;
+  uniform vec3 tint;
+  varying float vT;
+  void main() {
+    float a = smoothstep(0.0, 0.08, vT) * mix(0.28, 0.85, smoothstep(0.0, 0.9, vT)) * (1.0 - smoothstep(0.97, 1.0, vT));
+    gl_FragColor = vec4(tint, a * opacity);
+  }
+`;
 
 export class NetNoteApp {
   readonly graph = new GraphView();
@@ -518,6 +538,7 @@ export class NetNoteApp {
     this.updateConnect();
     this.updatePanelDrag();
     this.updateTouchReach();
+    this.updateRays();
     this.updateWall(dt);
     this.updateWallBar(dt, eye, quat);
     this.updateOverview(dt, eye, quat);
@@ -1801,6 +1822,51 @@ export class NetNoteApp {
   }
 
   private touchOn = { left: true, right: true };
+  private rayMats = new Map<string, ShaderMaterial>();
+
+  /**
+   * A pointing ray you can actually see, especially with hands: the system default is a 2 mm white
+   * line that only shows its last 25 cm, a metre from the hand. Ours runs from the hand all the way
+   * to what it touches (or 2.5 m into the room), ~5 mm wide, faint near the hand and brighter towards
+   * the target, translucent like the links; it turns warm white while you pinch.
+   */
+  private updateRays(): void {
+    type RayVisual = { ray: Mesh & { material: ShaderMaterial }; rayIntersection?: { distance: number } };
+    const mp = (this.world as unknown as { input?: { xr?: { multiPointers?: Record<'left' | 'right', { ray?: { visual?: RayVisual } }> } } }).input?.xr
+      ?.multiPointers;
+    if (!mp || !this.immersive) return;
+    const hands = this.handsActive();
+    for (const h of ['left', 'right'] as const) {
+      const v = mp[h]?.ray?.visual;
+      if (!v?.ray) continue;
+      const theirs = v.ray.material;
+      let mine = this.rayMats.get(h);
+      if (!mine) {
+        mine = new ShaderMaterial({
+          vertexShader: RAY_VERT,
+          fragmentShader: RAY_FRAG,
+          transparent: true,
+          depthWrite: false,
+          blending: AdditiveBlending,
+          uniforms: { opacity: { value: 0 }, tint: { value: new Color(COLORS.accent) }, endValue: { value: 0 }, color: { value: new Color() } },
+        });
+        this.rayMats.set(h, mine);
+      }
+      if (theirs !== mine) {
+        // keep their opacity / pressed colour logic: it writes into the same uniforms
+        mine.uniforms.color!.value.copy(theirs.uniforms.color!.value);
+        v.ray.material = mine;
+        theirs.dispose();
+      }
+      const c = mine.uniforms.color!.value as Color;
+      const pressed = c.b > 0.8 && c.r < 0.5; // their "pressed" blue
+      (mine.uniforms.tint!.value as Color).set(pressed ? 0xfff4d6 : COLORS.accent);
+      const len = Math.max(0.05, Math.min(6, v.rayIntersection?.distance ?? 2.5));
+      const w = hands ? 2.6 : 1.8;
+      v.ray.scale.set(w, w, len);
+      v.ray.renderOrder = 20;
+    }
+  }
 
   /**
    * Fingertip touch only wakes up when a fingertip is right at a panel (a few cm in front of it).

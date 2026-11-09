@@ -191,7 +191,17 @@ async function immersive(browser) {
   check('first-run tour starts in the headset', hint.length > 0, hint);
 
   await aim(page, 'Memory.md');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(500);
+  const ray = await page.evaluate(() => {
+    const v = window.netnote.world.input.xr.multiPointers.right.ray.visual;
+    const d = window.netnote.app.graph.worldPos('Memory.md').distanceTo(new v.ray.position.constructor(0.15, 1.35, -0.25));
+    return { len: v.ray.scale.z, width: v.ray.scale.x, ours: !!v.ray.material.uniforms.tint, opacity: v.ray.material.uniforms.opacity.value, d };
+  });
+  check(
+    'with hands the pointing ray is wide and reaches all the way to the star',
+    ray.ours && ray.width > 2 && Math.abs(ray.len - ray.d) < 0.15 && ray.opacity > 0.5,
+    JSON.stringify(ray),
+  );
   await pinch(page, 1);
   await page.waitForTimeout(300);
   await pinch(page, 0);
