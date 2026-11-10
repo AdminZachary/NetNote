@@ -923,6 +923,35 @@ async function handsDirect(browser) {
     JSON.stringify({ off, on }),
   );
   await palm(false);
+  // zoomed in, every name sits clear above its star (and its ring), never on it
+  const clear = await page.evaluate(async () => {
+    const { app } = window.netnote;
+    const root = app.graph.root;
+    root.updateMatrixWorld();
+    const c = app.graph.centre().applyMatrix4(root.matrixWorld);
+    const s = root.scale.x;
+    root.position.sub(c).multiplyScalar(3).add(c);
+    root.scale.setScalar(s * 3);
+    await new Promise((r) => setTimeout(r, 1200));
+    const g = app.graph;
+    const bad = [];
+    let n = 0;
+    for (const [id, lab] of g.labels) {
+      if (!lab.sprite.visible) continue;
+      const i = g.index.get(id);
+      const gap = lab.sprite.position.distanceTo(g.positions[i]);
+      const need = Math.max(g.drawn[i], g.ringed.has(id) ? g.radiusOf(i) * 1.8 : 0);
+      n++;
+      if (gap < need * 1.02) bad.push(id);
+    }
+    root.position
+      .sub(c)
+      .multiplyScalar(1 / 3)
+      .add(c);
+    root.scale.setScalar(s);
+    return { n, bad };
+  });
+  check('zoomed in, every name sits clear of its star and ring', clear.n > 3 && clear.bad.length === 0, JSON.stringify(clear));
   check('no page errors (hands)', errors.length === 0, errors[0]);
   await ctx.close();
 }

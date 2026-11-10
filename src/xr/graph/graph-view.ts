@@ -42,6 +42,9 @@ const tmpM = new Matrix4();
 const tmpV = new Vector3();
 const tmpV2 = new Vector3();
 const tmpQ = new Quaternion();
+const tmpQ2 = new Quaternion();
+const tmpQ3 = new Quaternion();
+const tmpV3 = new Vector3();
 const UP = new Vector3(0, 1, 0);
 const tmpC = new Color();
 
@@ -88,6 +91,10 @@ export class GraphView {
   /** time machine: notes not yet born are hidden; each grows in over ~0.3 s */
   private born: Set<string> | null = null;
   private growth = new Float32Array(0);
+  /** the radius each star is drawn at this frame (layout units) */
+  private drawn = new Float32Array(0);
+  /** stars with a gold bridge ring around them (drawn by the territories) */
+  ringed = new Set<string>();
   /** reduce motion: notes appear without growing */
   reducedMotion = false;
 
@@ -284,6 +291,8 @@ export class GraphView {
       const r = this.radiusOf(i) * (n.id === focus ? 1.6 : n.id === this.hovered ? 1.35 : 1) * Math.max(1e-4, g);
       tmpM.makeScale(r, r, r).setPosition(this.positions[i]!);
       this.nodeMesh.setMatrixAt(i, tmpM);
+      if (this.drawn.length !== this.nodes.length) this.drawn = new Float32Array(this.nodes.length);
+      this.drawn[i] = r;
       const pr = g < 0.5 ? 1e-4 : Math.max(r * 2.2, 7);
       tmpM.makeScale(pr, pr, pr).setPosition(this.positions[i]!);
       this.pickMesh.setMatrixAt(i, tmpM);
@@ -346,6 +355,9 @@ export class GraphView {
    */
   private updateLabels(camera: Camera, lit: Set<string>, scale: number): void {
     const eye = tmpV.setFromMatrixPosition(camera.matrixWorld);
+    // "up" as you see it, in the graph's own space: names sit above each star on screen, whichever
+    // way the graph is turned or tilted and however big it is
+    const up = tmpV3.set(0, 1, 0).applyQuaternion(camera.getWorldQuaternion(tmpQ2)).applyQuaternion(this.root.getWorldQuaternion(tmpQ3).invert()).normalize();
     const want = new Map<string, 'focus' | 'normal'>();
     if (this.selected) want.set(this.selected, 'focus');
     if (this.hovered) want.set(this.hovered, 'focus');
@@ -376,12 +388,20 @@ export class GraphView {
       const n = this.nodes[i]!;
       lab.set(n.name, kind === 'focus' ? FOCUS_LABEL : NODE_LABEL, n.ghost ? COLORS.textDim : undefined);
       const p = this.positions[i]!;
-      lab.sprite.position.set(p.x, p.y + this.radiusOf(i) * 1.25, p.z);
       const world = tmpV2.copy(p).applyMatrix4(this.root.matrixWorld);
       const dist = Math.max(0.3, world.distanceTo(eye));
       // constant angular height: 1.25° for normal labels, 1.6° for the focused one
       const deg = kind === 'focus' ? 1.6 : 1.25;
-      lab.setHeight(dist * Math.tan((deg * Math.PI) / 180), scale);
+      const hM = dist * Math.tan((deg * Math.PI) / 180);
+      lab.setHeight(hM, scale);
+      // clear of the star as it is drawn now (it grows when hovered or selected, and with the zoom),
+      // of its bridge ring, and of the star's own silhouette up close, plus a small gap
+      const drawnR = this.drawn[i] || this.radiusOf(i);
+      const ringR = this.ringed.has(id) ? Math.max(this.radiusOf(i) * 1.8, 0.015 / scale) : 0;
+      const rWorld = Math.max(drawnR, ringR) * scale;
+      const silhouette = (rWorld / Math.sqrt(Math.max(1e-6, dist * dist - rWorld * rWorld))) * dist; // apparent radius at the star's distance
+      const off = (Math.max(rWorld, silhouette) + hM * 0.3) / scale;
+      lab.sprite.position.set(p.x + up.x * off, p.y + up.y * off, p.z + up.z * off);
       lab.opacity = kind === 'focus' || lit.has(id) || !this.selected ? 1 : 0.55;
       lab.sprite.visible = true;
     }

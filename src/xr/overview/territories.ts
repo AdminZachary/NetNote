@@ -223,6 +223,7 @@ export class Territories {
     this.leaders.geometry.setDrawRange(0, k);
     lp.needsUpdate = true;
     lc.needsUpdate = true;
+    g.ringed = new Set(this.rings.map((r) => r.id));
     for (const r of this.rings) {
       const i = g.index.get(r.id);
       const p = i === undefined ? undefined : g.positions[i];
