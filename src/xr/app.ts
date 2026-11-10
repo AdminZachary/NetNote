@@ -538,6 +538,7 @@ export class NetNoteApp {
     this.updateConnect();
     this.updatePanelDrag();
     this.updateTouchReach();
+    if (this.dockHidden && this.immersive && !this.handsActive()) this.setDockHidden(false);
     this.updateRays();
     this.updateWall(dt);
     this.updateWallBar(dt, eye, quat);
@@ -680,6 +681,12 @@ export class NetNoteApp {
         this.mouseLast = dirOf(e);
         return;
       }
+      // moving the room by pinching empty space works only while the hand map is up: the map shows
+      // where you are taking it, and a stray pinch can never shove the whole room by accident
+      if (!this.minimap.visible) return;
+      // the left hand making the menu gesture is not grabbing the room
+      const palm = this.leftPalm();
+      if (palm && this.wasPalmUp && palm.centre.distanceTo(new Vector3(e.pointerPosition.x, e.pointerPosition.y, e.pointerPosition.z)) < 0.15) return;
       this.manip.begin(e.pointerId, e.pointerPosition);
     });
     on('pointermove', (e) => {
@@ -1166,7 +1173,7 @@ export class NetNoteApp {
   private closeEditor(): void {
     this.input.end();
     this.editor.mesh.visible = false;
-    this.dock.mesh.visible = true;
+    this.dock.mesh.visible = !this.dockHidden;
     if (this.writeMode?.kind === 'edit') this.writeMode = null;
   }
 
@@ -1187,7 +1194,7 @@ export class NetNoteApp {
 
   private closeComposer(): void {
     this.composer.mesh.visible = false;
-    this.dock.mesh.visible = true;
+    this.dock.mesh.visible = !this.dockHidden;
     this.writeMode = null;
   }
 
@@ -1735,6 +1742,22 @@ export class NetNoteApp {
   };
   /** both hands are holding the map: the line between the two pinches last frame */
   private mapHold: { prev: Vector3 } | null = null;
+  /** the menu bar put away with the left hand (palm towards you, a quick pinch) */
+  dockHidden = false;
+  /** a left pinch made with the palm towards you: on a quick release it shows / hides the menu */
+  private menuPinch: { t: number; spoiled: boolean } | null = null;
+
+  /** Show or hide the menu bar (the More row goes with it). */
+  setDockHidden(hidden: boolean): void {
+    if (hidden === this.dockHidden) return;
+    this.dockHidden = hidden;
+    if (!this.writing) this.dock.mesh.visible = !hidden;
+    if (hidden) {
+      this.tools.mesh.visible = false;
+      this.dock.setActive('more', false);
+    } else this.placeDock(true, this.headPose().pos, yawOf(this.headPose().quat));
+    this.sound.play(hidden ? 'close' : 'open', this.dock.mesh.position, null);
+  }
 
   /** World positions of some joints of one tracked hand, or null. */
   private joints(hand: 'left' | 'right', names: XRHandJoint[]): Vector3[] | null {
@@ -1780,8 +1803,17 @@ export class NetNoteApp {
       st.at.copy(j[0]!).lerp(j[1]!, 0.5);
       if (st.on && !was) st.grab = this.minimap.visible && st.at.distanceTo(centre) < reach;
       if (!st.on) st.grab = false;
+      // the menu gesture (as on Meta's own menu): left palm towards you, a quick pinch and let go
+      if (h === 'left') {
+        if (st.on && !was) this.menuPinch = this.wasPalmUp && !this.pinches.right.on ? { t: performance.now(), spoiled: false } : null;
+        else if (!st.on && was && this.menuPinch) {
+          if (!this.menuPinch.spoiled && performance.now() - this.menuPinch.t < 650) this.setDockHidden(!this.dockHidden);
+          this.menuPinch = null;
+        }
+      }
     }
     const { left: l, right: r } = this.pinches;
+    if (this.menuPinch && (r.on || this.mapHold)) this.menuPinch.spoiled = true; // a two-hand hold, not the menu
     if (l.grab && r.grab) {
       const v = r.at.clone().sub(l.at);
       if (!this.mapHold) {

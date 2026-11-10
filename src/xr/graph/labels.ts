@@ -28,7 +28,9 @@ export class Label {
 
   constructor() {
     this.texture = this.makeTexture();
-    const mat = new SpriteMaterial({ map: this.texture, transparent: true, depthWrite: false, depthTest: true, toneMapped: false });
+    // drawn over the stars (no depth test), so a nearer star never hides a name; panels are drawn
+    // later and still cover labels behind them
+    const mat = new SpriteMaterial({ map: this.texture, transparent: true, depthWrite: false, depthTest: false, toneMapped: false });
     this.sprite = new Sprite(mat);
     this.sprite.renderOrder = 5;
     this.sprite.raycast = () => undefined; // labels never take a pinch (and sprites need a camera to raycast)

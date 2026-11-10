@@ -873,6 +873,56 @@ async function handsDirect(browser) {
   await palm(false);
   await page.waitForTimeout(2200);
   check('turning the palm back puts the map away', !(await page.evaluate(() => window.netnote.app.minimap.visible)));
+
+  // pinching empty space moves the room only while the hand map is up
+  const shove = () =>
+    page.evaluate(async () => {
+      const { app } = window.netnote;
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const hand = window.IWER_DEVICE.hands.right;
+      const V = app.graph.root.position.constructor;
+      const Q = app.graph.root.quaternion.constructor;
+      const q = new Q().setFromUnitVectors(new V(0, 0, -1), new V(0.1, 1, 0.25).normalize()); // up: nothing there
+      hand.quaternion.set(q.x, q.y, q.z, q.w);
+      hand.position.set(0.2, 1.3, -0.25);
+      await wait(300);
+      const before = app.graph.root.position.clone();
+      hand.updatePinchValue(1);
+      await wait(250);
+      for (let i = 1; i <= 6; i++) {
+        hand.position.set(0.2 + i * 0.03, 1.3, -0.25);
+        await wait(90);
+      }
+      hand.updatePinchValue(0);
+      await wait(400);
+      return app.graph.root.position.distanceTo(before);
+    });
+  const noMap = await shove();
+  check('without the hand map, pinching empty space does not move the room', noMap < 0.01, `${noMap.toFixed(3)} m`);
+  await page.evaluate(() => window.netnote.app.onDock('map'));
+  await page.waitForTimeout(800);
+  const withMap = await shove();
+  check('with the map up, pinching empty space and moving the hand moves the room', withMap > 0.08, `${withMap.toFixed(3)} m`);
+  await page.evaluate(() => window.netnote.app.onDock('map'));
+
+  // left palm towards you and a quick pinch: the menu bar goes away, and comes back the same way
+  const menuPinch = async () => {
+    await palm(true);
+    await page.waitForTimeout(900);
+    await page.evaluate(() => window.IWER_DEVICE.hands.left.updatePinchValue(1));
+    await page.waitForTimeout(250);
+    await page.evaluate(() => window.IWER_DEVICE.hands.left.updatePinchValue(0));
+    await page.waitForTimeout(350);
+    return page.evaluate(() => ({ hidden: window.netnote.app.dockHidden, visible: window.netnote.app.dock.mesh.visible }));
+  };
+  const off = await menuPinch();
+  const on = await menuPinch();
+  check(
+    'left palm towards you + a quick pinch hides the menu bar, and the same again shows it',
+    off.hidden && !off.visible && !on.hidden && on.visible,
+    JSON.stringify({ off, on }),
+  );
+  await palm(false);
   check('no page errors (hands)', errors.length === 0, errors[0]);
   await ctx.close();
 }

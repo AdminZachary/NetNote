@@ -184,10 +184,10 @@ const en = {
   bridgeNote: 'Bridge between',
   // onboarding
   tipPinch: 'Pinch a star to read it',
-  tipDrag: 'Pinch empty space and move your hand to move the room',
+  tipDrag: 'Turn your left palm up for the map, then pinch empty space and move your hand to move the room',
   tipTwoHands: 'Pinch with both hands and pull apart to zoom',
   tipConnect: 'Pinch a star and drag it onto another to connect them',
-  tipMenu: 'Look down: the menu floats just below your view',
+  tipMenu: 'The menu floats just below your view; left palm towards you and a quick pinch shows or hides it',
   // insight phrasing
   sharedLinks: (names: string[]) => `both link to ${names.map((n) => `“${n}”`).join(', ')}`,
   sharedTerms: (terms: string[]) => `both talk about ${terms.map((t) => `“${t}”`).join(', ')}`,
@@ -431,10 +431,10 @@ const zh: Dict = {
   topics: '主题',
   bridgeNote: '连接了',
   tipPinch: '捏一下星星就能阅读',
-  tipDrag: '在空白处捏住并移动手，可以移动整个房间',
+  tipDrag: '左手掌心翻向自己调出地图，再在空白处捏住并移动手，就能移动整个房间',
   tipTwoHands: '双手同时捏住再拉开，可以缩放',
   tipConnect: '捏住一颗星拖到另一颗上，就能把它们连起来',
-  tipMenu: '稍稍低头：菜单就在视线下方',
+  tipMenu: '菜单在视线下方；左手掌心朝向自己快速捏一下，可以显示或收起',
   sharedLinks: (names) => `都链接了${names.map((n) => `「${n}」`).join('')}`,
   sharedTerms: (terms) => `都谈到${terms.map((t) => `「${t}」`).join('')}`,
   gapNone: (a, b, terms) =>

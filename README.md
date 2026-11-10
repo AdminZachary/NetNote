@@ -19,7 +19,7 @@ Built with Meta's [Immersive Web SDK](https://github.com/facebook/immersive-web-
 |---|---|
 | **See** | The graph floats in front of you, coloured by topic. Topic *territories* glow around their notes with a name label; bridge notes get a gold ring. |
 | **Read** | Pinch a star: the whole graph turns about its centre to bring it round to you, and its card opens on the reading shelf to your right, with clickable links, backlinks and "possibly related" notes. Pinch the text and drag it up to read a long note (flick it and it carries on). Pin cards to keep several open. |
-| **Move the room** | Pinch empty space and move your hand. Pinch with both hands: pull apart to zoom, turn to rotate. |
+| **Move the room** | With the hand map up, pinch empty space and move your hand (without the map, a stray pinch never shoves the room). Pinch with both hands: pull apart to zoom, turn to rotate. Left palm towards you and a quick pinch shows or hides the menu bar. Note names always draw over the stars, so a nearer star never hides one. |
 | **Connect** | Pinch a star and drag it onto another. A writing card asks *why are these connected?* The answer is written into the note (`## Connections`). |
 | **Write** | New idea, rename, delete, and *Edit*: the note opens block by block (paragraphs, headings, lists); pick a block, change it, add one below or remove it, then save. Pinch anywhere in the text to put the cursor there. Text comes from the Meta Quest system keyboard (including the surface keyboard on your desk), voice dictation or a Bluetooth keyboard. |
 | **Think on the wall** | Put cards on the *thinking wall* on your left. Cards placed side by side form a group; the group tells you what they share, which note seems to be missing (pinch it to bring it in) and asks a question. *Write an answer* creates a note linked to the whole group. Keep several walls, one per question: a small switcher at the near end of the wall (it shows when you look that way) opens the previous or next wall, makes a new one, renames or deletes it, and *To wall* always goes to the wall that is open. Every wall is saved. |
@@ -150,7 +150,7 @@ NetNote 是一款 VR 原生笔记应用：把 Markdown / Obsidian 笔记摊在�
 - **开发**：`npm install` 然后 `npm run dev`（需要 Node.js 20.19+），浏览器会打开桌面预览（内置 Quest 3 模拟器）。
 - **在本机开发时用 Quest 试**：电脑和 Quest 连同一个 Wi-Fi，用 Quest 浏览器打开终端里显示的
   `https://电脑IP:8081/`，选择继续访问，点「进入 VR」或「进入混合现实」。
-- **在头显里**：捏星星阅读；在空白处捏住移动整个房间，双手拉开缩放；捏住一颗星拖到另一颗上连线，
+- **在头显里**：捏星星阅读；手中地图出现时在空白处捏住可移动整个房间（地图没出来时不会误拖），双手拉开缩放；左手掌心朝向自己快速捏一下，可显示或收起菜单栏；笔记名字总画在星球前面，不会被挡住；捏住一颗星拖到另一颗上连线，
   并用 Quest 键盘或语音写下原因；左手边是思考墙，并排放的卡片成为一组，会告诉你共同话题、缺的那篇和一个问题；可以有多面墙（一个问题一面），转头看向墙时出现切换面板，可切换、新建、重命名、删除，「上墙」总是放到当前打开的那面；长笔记捏住正文向上拖即可往下读；
   「洞察」列出隐藏联系、值得追问、还没写的笔记和漂流的笔记；左手掌心朝向自己，「手中地图」出现在双手之间并固定在那里；双手同时捏住它即可旋转和缩放，大星图同步，捏着的时候掌心转开也不会消失，松手且掌心转开后收起；指一下某颗星就把它转到面前；卡片上「编辑」可按段落修改，捏文字任意处即可在光标处插入或删改；悬浮菜单栏可直接用手指点；
   不进 VR 时是 2D 写作台：左边笔记列表，中间写或读，右边是它的联系，输入 [[ 会提示可链接的笔记，自动保存，可以用 Quest 桌面键盘输入；「星图」是平面 2D 图，拖动平移、滚轮或双指缩放、点选查看、双击打开；
