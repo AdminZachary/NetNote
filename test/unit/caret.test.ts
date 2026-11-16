@@ -69,3 +69,15 @@ describe('typing in the headset (the keyboard only knows its own buffer)', () =>
     expect(seg.apply('abZ', 3)).toMatchObject({ text: 'oneZ two', caret: 4 });
   });
 });
+
+import { detectLocale } from '../../src/app/i18n';
+
+describe('detectLocale', () => {
+  it('follows the first (preferred) system language; anything not Chinese is English', () => {
+    expect(detectLocale(['zh-CN', 'en'])).toBe('zh');
+    expect(detectLocale(['zh-Hant-TW'])).toBe('zh');
+    expect(detectLocale(['en-US', 'zh-CN'])).toBe('en');
+    expect(detectLocale(['fr-FR'])).toBe('en');
+    expect(detectLocale([])).toBe('en');
+  });
+});

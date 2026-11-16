@@ -31,8 +31,8 @@ async function launch() {
   }
 }
 
-async function ready(page) {
-  await page.goto(URL_, { waitUntil: 'load' });
+async function ready(page, url = URL_ + '?notour') {
+  await page.goto(url, { waitUntil: 'load' });
   await page.waitForFunction(() => window.netnote?.library.vault, null, { timeout: 60000 });
   await page.waitForTimeout(1200);
 }
@@ -54,6 +54,61 @@ function aim(page, id) {
 
 const pinch = (page, v) => page.evaluate((v) => window.IWER_DEVICE.hands.right.updatePinchValue(v), v);
 const state = (page) => page.evaluate(() => window.netnote.app.state);
+
+/** First run: the language follows the system, and a tour walks through every feature once. */
+async function firstRun(browser) {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: true, locale: 'en-US' });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await ready(page, URL_);
+  check(
+    'no language switch: the page follows the system language',
+    !(await page.isVisible('[data-testid=language]')) && (await page.textContent('[data-testid=ws-new]')) === 'New note',
+  );
+  check('the first visit starts the tour', await page.isVisible('[data-testid=tour]'));
+  const seen = [];
+  for (let i = 0; i < 20 && (await page.isVisible('[data-testid=tour]')); i++) {
+    const step = await page.evaluate(() => {
+      const t = window.netnote.workspace.tour;
+      const hole = document.querySelector('.nn-tour-hole').getBoundingClientRect();
+      const card = document.querySelector('.nn-tour-card').getBoundingClientRect();
+      const inside = card.left >= 0 && card.top >= 0 && card.right <= innerWidth && card.bottom <= innerHeight;
+      return { i: t.index, title: document.querySelector('.nn-tour-card h2').textContent, lit: hole.width > 0, inside };
+    });
+    seen.push(step);
+    await page.click('[data-testid=tour-next]');
+    await page.waitForTimeout(150);
+  }
+  check(
+    'the tour walks through every part (notes, writing, links, map, library, headset, hands), each card inside the window',
+    seen.length >= 9 && seen.every((s) => s.inside) && seen.filter((s) => s.lit).length >= 8,
+    seen.map((s) => s.title).join(' › '),
+  );
+  check('the tour opened a note so the writing step had something to show', !!(await page.evaluate(() => window.netnote.workspace.current)));
+  await ready(page, URL_);
+  check('once seen, the tour does not come back by itself', !(await page.isVisible('[data-testid=tour]')));
+  await page.click('[data-testid=ws-tour]');
+  await page.waitForTimeout(200);
+  const again = await page.isVisible('[data-testid=tour]');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  check('"Tour" plays it again, and Esc closes it', again && !(await page.isVisible('[data-testid=tour]')));
+  check('no page errors (first run)', errors.length === 0, errors[0]);
+  await ctx.close();
+  // a Chinese system gets Chinese; an English one with Chinese as a second language stays English
+  for (const [locale, want] of [
+    ['zh-CN', '新建笔记'],
+    ['en-GB', 'New note'],
+  ]) {
+    const c = await browser.newContext({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: true, locale });
+    const p = await c.newPage();
+    await ready(p);
+    const got = await p.textContent('[data-testid=ws-new]');
+    check(`system language ${locale} shows the matching words`, got === want, got);
+    await c.close();
+  }
+}
 
 async function desktop(browser) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: true });
@@ -207,6 +262,9 @@ async function immersive(browser) {
   await pinch(page, 0);
   await page.waitForTimeout(700);
   check('pinching a star opens its card (hands)', (await state(page)).cards[0] === 'Memory.md');
+  await page.waitForTimeout(300);
+  const guide = await page.evaluate(() => ({ step: window.netnote.app.hint.step, text: window.netnote.app.hint.text }));
+  check('the headset guide moves on to the next feature (the map in your hand)', guide.step === '2/7' && /palm/i.test(guide.text), JSON.stringify(guide));
   await page.waitForFunction(() => !window.netnote.app.turn, null, { timeout: 5000 }); // the graph has turned it to you
 
   const pair = await page.evaluate(() => {
@@ -1167,6 +1225,7 @@ const server = process.env.E2E_URL ? null : await createServer({ server: { port:
 await server?.listen();
 const browser = await launch();
 try {
+  await firstRun(browser);
   await desktop(browser);
   await immersive(browser);
   await wall(browser);

@@ -258,6 +258,58 @@ const en = {
   g2Help: 'Drag to move · scroll or pinch to zoom · click a note',
   g2Links: (n: number) => `${n} link${n === 1 ? '' : 's'}`,
   g2Open: 'Open',
+  wsTour: 'Tour',
+  tourStep: (i: number, n: number) => `Step ${i} of ${n}`,
+  tourSkip: 'Skip tour',
+  tourBack: 'Back',
+  tourNext: 'Next',
+  tourFinish: 'Start using NetNote',
+  tourWelcomeT: 'Welcome to NetNote',
+  tourWelcome:
+    'NetNote helps you connect what you know: every note is a star, every link a line, and it points out links you have not made yet. Here is everything it does, in about a minute.',
+  tourListT: 'Your notes',
+  tourList: 'All your notes, newest first. Search by words or #tags at the top; pick one to open it.',
+  tourNewT: 'Write a new note',
+  tourNew: 'Start a note here. Notes are plain Markdown, the same files Obsidian uses.',
+  tourWriteT: 'Write, and link as you go',
+  tourWrite:
+    'Write in the middle; it saves by itself. Type [[ to link another note: suggestions appear as you type. Switch to Read to see the note laid out, with links you can follow.',
+  tourSideT: 'Connections',
+  tourSide:
+    'What this note links to, what links to it, notes that mention it without a link yet, and notes that are possibly related. One click turns a mention into a real link.',
+  tourGraphT: 'The star map',
+  tourGraph:
+    'See your whole library as a map: notes that link sit close, colours are topics. Drag to move, scroll to zoom, click a star to see it and its neighbours light up.',
+  tourLibraryT: 'Your library',
+  tourLibrary: 'Import an Obsidian vault or a folder of Markdown files, export everything as a zip, or switch libraries. Everything stays on this device.',
+  tourHeadsetT: 'Step inside',
+  tourHeadset: 'On a Meta Quest, Enter VR or Enter mixed reality puts the map around you. In there:',
+  tourHeadsetItems: [
+    ['✦', 'Pinch a star to read it: the graph turns it round to you and its card opens on your right.'],
+    ['⟷', 'Pinch a star and drag it onto another to link them, then say why.'],
+    [
+      '▦',
+      'The thinking wall on your left: hang cards side by side and each group tells you what they share, what is missing, and a question to ask. Keep one wall per question.',
+    ],
+    ['◎', 'Insights find hidden links, open questions, unwritten and drifting notes.'],
+    ['▣', 'In mixed reality the map stands on your real desk and the wall hangs on your real wall.'],
+  ] as [string, string][],
+  tourHandsT: 'Made for your hands',
+  tourHands: 'No controllers needed:',
+  tourHandsItems: [
+    ['✋', 'Turn your left palm towards you: a map of the room appears between your hands. Pinch it with both hands to turn and zoom everything.'],
+    ['☰', 'The menu floats just below your view; touch it with a fingertip. Left palm towards you and a quick pinch shows or hides it.'],
+    ['✎', 'Type with the Quest keyboard, the surface keyboard on your desk, a Bluetooth keyboard, or your voice.'],
+    ['⇕', 'Pinch the text of a long note and drag it up to read on.'],
+  ] as [string, string][],
+  tourDoneT: 'You are ready',
+  tourDone:
+    'Open Welcome to start, or write your own first note. Inside the headset a short guide shows each gesture the first time. Play this tour again any time with Tour.',
+  xrTourMap: 'Turn your left palm towards you: the map appears between your hands',
+  xrTourWall: 'Look left: that is your thinking wall. Pinch “To wall” on a card to hang it there',
+  xrTourInsights: 'Open Insights in the menu: it finds links you have not made yet',
+  xrTourDone: 'That is everything. Have a good think!',
+  xrTourSkip: 'Skip guide',
 };
 
 type Dict = typeof en;
@@ -503,12 +555,63 @@ const zh: Dict = {
   g2Help: '拖动移动 · 滚轮或双指缩放 · 点选笔记',
   g2Links: (n: number) => `${n} 个链接`,
   g2Open: '打开',
+  wsTour: '导览',
+  tourStep: (i, n) => `第 ${i} 步，共 ${n} 步`,
+  tourSkip: '跳过导览',
+  tourBack: '上一步',
+  tourNext: '下一步',
+  tourFinish: '开始使用 NetNote',
+  tourWelcomeT: '欢迎来到 NetNote',
+  tourWelcome: 'NetNote 帮你把知道的东西连起来：每篇笔记是一颗星，每个链接是一条线，它还会指出你还没建立的联系。下面用一分钟带你看完所有功能。',
+  tourListT: '你的笔记',
+  tourList: '所有笔记，最新的在前。顶部可以按文字或 #标签 搜索，点一篇就打开。',
+  tourNewT: '写一篇新笔记',
+  tourNew: '从这里新建笔记。笔记就是普通的 Markdown，和 Obsidian 用的是同一种文件。',
+  tourWriteT: '边写边链接',
+  tourWrite: '在中间写，会自动保存。输入 [[ 就能链接到另一篇笔记，边打字边给出建议。切到「阅读」可以看排好版的笔记，链接可以直接点。',
+  tourSideT: '联系',
+  tourSide: '这篇链接到哪些笔记、哪些笔记链接到它、哪些提到它但还没链接、哪些可能相关。点一下就能把「提到」变成真正的链接。',
+  tourGraphT: '星图',
+  tourGraph: '把整个笔记库看成一张图：互相链接的笔记挨得近，颜色代表话题。拖动平移、滚轮缩放，点一颗星就能看到它和邻居亮起来。',
+  tourLibraryT: '笔记库',
+  tourLibrary: '导入 Obsidian 库或一个 Markdown 文件夹，导出全部为 zip，或切换笔记库。所有内容都只保存在这台设备上。',
+  tourHeadsetT: '走进去',
+  tourHeadset: '在 Meta Quest 上点「进入 VR」或「进入混合现实」，星图就会围绕在你身边。在里面：',
+  tourHeadsetItems: [
+    ['✦', '捏一下星星就能阅读：星图会把它转到你面前，卡片在右手边打开。'],
+    ['⟷', '捏住一颗星拖到另一颗上就能连起来，再写下原因。'],
+    ['▦', '左手边是思考墙：把卡片并排挂上，每一组会告诉你共同点、缺的那篇和一个值得追问的问题。可以一个问题一面墙。'],
+    ['◎', '「洞察」会找出隐藏联系、值得追问的问题、还没写和漂流的笔记。'],
+    ['▣', '混合现实下星图会立在你真实的桌面上，思考墙挂在真实的墙前。'],
+  ],
+  tourHandsT: '为双手设计',
+  tourHands: '不需要手柄：',
+  tourHandsItems: [
+    ['✋', '左手掌心翻向自己：双手之间会出现一个房间地图。双手同时捏住它，就能旋转和缩放整个星图。'],
+    ['☰', '菜单在视线下方，用指尖直接点。左手掌心朝向自己快速捏一下，可以显示或收起。'],
+    ['✎', '用 Quest 键盘、桌面上的平面键盘、蓝牙键盘或语音输入。'],
+    ['⇕', '长笔记捏住正文向上拖，就能往下读。'],
+  ],
+  tourDoneT: '准备好了',
+  tourDone: '打开 Welcome 开始，或者写下你的第一篇笔记。进入头显后，第一次会有简短提示一步步教你手势。随时点「导览」可以再看一遍。',
+  xrTourMap: '左手掌心翻向自己：地图会出现在双手之间',
+  xrTourWall: '向左看，那是你的思考墙。在卡片上捏「上墙」就能挂上去',
+  xrTourInsights: '在菜单里打开「洞察」：它会找出你还没建立的联系',
+  xrTourDone: '以上就是全部，好好思考吧！',
+  xrTourSkip: '跳过引导',
 };
 
 const DICTS: Record<Locale, Dict> = { en, zh };
 
-export function detectLocale(langs: readonly string[] = typeof navigator !== 'undefined' ? navigator.languages : []): Locale {
-  return langs.some((l) => l.toLowerCase().startsWith('zh')) ? 'zh' : 'en';
+/**
+ * The language comes from the system, silently: the browser's first (preferred) language picks the
+ * dictionary, and everything that is not Chinese gets English, the default. There is no switch.
+ */
+export function detectLocale(
+  langs: readonly string[] = typeof navigator !== 'undefined' ? (navigator.languages?.length ? navigator.languages : [navigator.language]) : [],
+): Locale {
+  const first = (langs[0] ?? '').toLowerCase();
+  return first.startsWith('zh') ? 'zh' : 'en';
 }
 
 let current: Locale = 'en';

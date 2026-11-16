@@ -134,6 +134,9 @@ export interface AppOptions {
   onExit?: () => void;
 }
 
+/** the headset guide was finished on this device */
+const XR_TOUR = 'netnote.xrtour.v1';
+
 const RAY_VERT = `
   varying float vT;
   void main() {
@@ -218,7 +221,8 @@ export class NetNoteApp {
   private writeMode: WriteMode | null = null;
   private pinned = new Set<string>();
   private moved = new Set<NoteCard>();
-  private tour = { read: false, move: false, connect: false, menu: false };
+  private tour = { read: false, map: false, move: false, connect: false, wall: false, insights: false, menu: false };
+  private tourFinishedAt = 0;
   private immersive = false;
   /** mixed reality: real surfaces found by scene understanding */
   private room: { mixed: boolean; table: TableSpot | null; wall: WallFit | null; searchUntil: number; nextLook: number } = {
@@ -553,6 +557,10 @@ export class NetNoteApp {
     if (this.toastTimer > 0) {
       this.toastTimer -= dt;
       if (this.toastTimer <= 0) this.nextTourHint();
+    }
+    if (this.tourFinishedAt && performance.now() - this.tourFinishedAt > 5000 && this.toastTimer <= 0) {
+      this.tourFinishedAt = 0;
+      this.nextTourHint();
     }
     // the hint floats above the graph, facing you
     const fwd = FORWARD.clone().applyQuaternion(new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), this.home.yaw));
@@ -1306,6 +1314,7 @@ export class NetNoteApp {
     this.moved.delete(card);
     this.showCard(path, card);
     this.wallChanged();
+    this.tourDone('wall');
     const name = this.walls[this.wallIdx]?.name;
     if (name && this.walls.length > 1) this.toast(t().wallPut(name));
   }
@@ -1693,6 +1702,7 @@ export class NetNoteApp {
     else if (this.mapHold) this.mapLinger = 0.3;
     else this.mapLinger = Math.max(0, this.mapLinger - dt);
     const onHand = palmUp || !!this.mapHold || this.mapLinger > 0;
+    if (this.minimap.visible) this.tourDone('map');
     this.minimap.target = onHand || this.mapPinned ? 1 : 0;
     const baseAt: Vector3 | null = null;
     const left = this.immersive && !palm ? this.leftHand() : null;
@@ -1985,6 +1995,7 @@ export class NetNoteApp {
   }
 
   private openInsights(): void {
+    this.tourDone('insights');
     this.onSearch('close', undefined);
     this.renderInsights();
     const p = shelfPoint(this.home, -this.shelf.activeAz, -this.shelf.drop + 0.02, this.immersive ? 1.0 : this.shelf.radius);
@@ -2152,26 +2163,49 @@ export class NetNoteApp {
   // ---------- onboarding (first five minutes) ----------
 
   private startTour(): void {
+    // a guide you have finished once on this device does not come back
+    try {
+      if (localStorage.getItem(XR_TOUR) === '1') for (const k of Object.keys(this.tour) as (keyof NetNoteApp['tour'])[]) this.tour[k] = true;
+    } catch {
+      /* storage blocked: show the guide */
+    }
     this.nextTourHint();
   }
 
   private tourDone(step: keyof NetNoteApp['tour']): void {
     if (this.tour[step]) return;
     this.tour[step] = true;
+    if (Object.values(this.tour).every(Boolean)) {
+      this.tourFinishedAt = performance.now();
+      try {
+        localStorage.setItem(XR_TOUR, '1');
+      } catch {
+        /* fine */
+      }
+    }
     if (this.toastTimer <= 0) this.nextTourHint();
   }
 
+  /**
+   * The guide in the headset: every feature once, in the order you need them. Each step moves on
+   * when you actually do the thing (never by timer); a step you happen to do early just disappears.
+   */
   private nextTourHint(): void {
     const tr = t();
     const order: [keyof NetNoteApp['tour'], string][] = [
       ['read', tr.tipPinch],
+      ['map', tr.xrTourMap],
       ['move', tr.tipDrag],
       ['connect', tr.tipConnect],
+      ['wall', tr.xrTourWall],
+      ['insights', tr.xrTourInsights],
       ['menu', tr.tipMenu],
     ];
     const i = order.findIndex(([k]) => !this.tour[k]);
-    if (i < 0 || !this.immersive) this.hint.show('');
-    else this.hint.show(order[i]![1], `${i + 1}/${order.length}`);
+    if (!this.immersive) this.hint.show('');
+    else if (i >= 0) this.hint.show(order[i]![1], `${i + 1}/${order.length}`);
+    else if (this.tourFinishedAt && performance.now() - this.tourFinishedAt < 5000) this.hint.show(tr.xrTourDone);
+    else this.hint.show('');
   }
 
   // ---------- motion ----------

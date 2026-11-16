@@ -10,11 +10,12 @@
  * every target at least 44 px tall, strong contrast, a visible focus ring, no native dialogs, and
  * nothing that moves unless you act (reduced motion honoured).
  */
-import { getLocale, t } from '../app/i18n';
+import { t } from '../app/i18n';
 import type { Library } from '../app/library';
 import { insightRows } from '../app/insight-rows';
 import type { NoteView } from '../core/vault/vault';
 import { GRAPH2D_CSS, Graph2D } from './graph2d';
+import { Tour } from './tour';
 import { completeLink, linkQueryAt, markdownToHtml } from './markdown-html';
 
 export interface WorkspaceDeps {
@@ -23,7 +24,6 @@ export interface WorkspaceDeps {
   enter(mode: 'vr' | 'ar'): void;
   /** show / hide the library drawer (import, export, switch library) */
   toggleLibrary(): void;
-  onLocale(): void;
   toast(text: string): void;
 }
 
@@ -125,6 +125,9 @@ export class Workspace {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private confirmDelete = false;
   private graphing = false;
+  readonly tour: Tour;
+  /** the tour finished or was skipped (to remember it was seen) */
+  onTourClosed: (() => void) | null = null;
   readonly graph: Graph2D;
   private els: {
     search: HTMLInputElement;
@@ -158,6 +161,19 @@ export class Workspace {
     const list = this.div('nn-col nn-list');
     const main = this.div('nn-col nn-main');
     const side = this.div('nn-col nn-side');
+    this.tour = new Tour(doc);
+    this.tour.onClose = () => this.onTourClosed?.();
+    this.tour.onStep = (step) => {
+      // each step shows the part it is about: a note open for the writing and connection steps
+      if (this.graphing) this.setGraph(false);
+      const wantsNote = step.target === '.nn-main' || step.target === '.nn-side';
+      this.root.dataset.pane = step.target === '.nn-list' ? 'list' : 'note';
+      if (wantsNote && !this.current) {
+        const vault = this.deps.library.vault;
+        const first = vault?.notes.has('Welcome.md') ? 'Welcome.md' : [...(vault?.notes.keys() ?? [])][0];
+        if (first) void this.open(first);
+      }
+    };
     this.graph = new Graph2D(deps.library);
     this.graph.onOpen = (id) => void this.openFromGraph(id);
     body.append(list, main, side, this.graph.root);
@@ -233,13 +249,13 @@ export class Workspace {
     const graph = this.button(tr.wsGraph, () => this.setGraph(!this.graphing), this.graphing ? 'nn-on' : '', 'ws-graph');
     graph.setAttribute('aria-pressed', String(this.graphing));
     const libBtn = this.button(tr.wsLibrary, () => this.deps.toggleLibrary(), '', 'ws-library');
-    const lang = this.button(getLocale() === 'zh' ? 'EN' : '中文', () => this.deps.onLocale(), 'nn-small', 'language');
+    const tourBtn = this.button(tr.wsTour, () => this.tour.start(), '', 'ws-tour');
     const vr = this.button(tr.enterVR, () => this.deps.enter('vr'), 'nn-primary', 'enter-vr');
     vr.disabled = !this.deps.support.vr;
     const ar = this.button(tr.enterAR, () => this.deps.enter('ar'), 'nn-primary', 'enter-ar');
     ar.disabled = !this.deps.support.ar;
     if (!this.deps.support.vr && !this.deps.support.ar) vr.title = ar.title = tr.noXR;
-    top.append(brand, back, this.els.search, add, this.div('nn-spacer'), graph, libBtn, lang, vr, ar);
+    top.append(brand, back, this.els.search, add, this.div('nn-spacer'), graph, libBtn, tourBtn, vr, ar);
   }
 
   /** Show the star map (a flat 2D map here; the 3D one is for the headset) in place of the note. */

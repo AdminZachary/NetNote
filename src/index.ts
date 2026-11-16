@@ -5,7 +5,7 @@
 import { createSystem, SessionMode, World } from '@iwsdk/core';
 import projectOptions from 'virtual:iwsdk-project';
 import { chooseLibrary, sampleFiles } from './app/bootstrap';
-import { detectLocale, getLocale, setLocale, type Locale } from './app/i18n';
+import { detectLocale, setLocale } from './app/i18n';
 import { Library } from './app/library';
 import { IdbStore } from './storage/store';
 import { Landing } from './web/landing';
@@ -13,7 +13,6 @@ import { Workspace } from './web/workspace';
 import { NetNoteApp } from './xr/app';
 
 const LAST = 'netnote.last';
-const LOCALE = 'netnote.locale';
 
 const storage = {
   get: (k: string): string | null => {
@@ -79,8 +78,8 @@ async function xrSupport(): Promise<{ vr: boolean; ar: boolean }> {
 }
 
 async function main(): Promise<void> {
-  const saved = storage.get(LOCALE);
-  setLocale(saved === 'zh' || saved === 'en' ? saved : detectLocale());
+  setLocale(detectLocale());
+  document.documentElement.lang = detectLocale() === 'zh' ? 'zh' : 'en';
 
   const container = document.getElementById('scene-container') as HTMLDivElement;
   const world = await World.create(container, projectOptions);
@@ -124,14 +123,6 @@ async function main(): Promise<void> {
       );
     },
     toggleLibrary: () => (landing.hidden = !landing.hidden),
-    onLocale: () => {
-      const next: Locale = getLocale() === 'zh' ? 'en' : 'zh';
-      setLocale(next);
-      storage.set(LOCALE, next);
-      app?.relabel();
-      workspace.render();
-      landing.render();
-    },
     toast: (text) => landing.toast(text),
   });
   library.on('error', (e) => landing.toast(e.message));
@@ -139,7 +130,19 @@ async function main(): Promise<void> {
   await open(await chooseLibrary(library, sample, storage.get(LAST)));
   await landing.refresh();
   workspace.render();
-  document.documentElement.lang = saved ?? navigator.language;
+  // the first time on this device: a short tour of everything (the Tour button plays it again)
+  const TOUR = 'netnote.tour.v1';
+  workspace.onTourClosed = () => storage.set(TOUR, '1');
+  if (!storage.get(TOUR) && !new URLSearchParams(location.search).has('notour')) workspace.tour.start();
+
+  // the system language changed while the page is open: follow it, without a reload
+  window.addEventListener('languagechange', () => {
+    setLocale(detectLocale());
+    document.documentElement.lang = detectLocale();
+    app?.relabel();
+    workspace.render();
+    landing.render();
+  });
 
   // test & debugging hook (also used by the end-to-end tests)
   (window as unknown as { netnote: unknown }).netnote = { world, library, app, landing, workspace };

@@ -138,6 +138,8 @@ right (links to, linked from, mentions that are not links yet, possibly related,
 connect). Typing `[[` offers notes to link. Changes save by themselves; Ctrl/Cmd+S saves at once.
 These are real text fields, so the Quest 3 surface keyboard, Bluetooth keyboards and voice all work.
 *Graph* shows a flat 2D star map of the library (drag to pan, scroll or pinch to zoom, click a star for its card, double-click or *Open* to read it; search dims everything that does not match); *Library* imports, exports and switches libraries.
+On the first visit a short *Tour* walks through every feature, in the browser and in the headset (the *Tour* button plays it again), and inside the headset a guide shows each gesture once.
+The interface follows your system language: English by default, Chinese on a Chinese system; there is nothing to switch.
 
 ---
 
@@ -153,7 +155,7 @@ NetNote 是一款 VR 原生笔记应用：把 Markdown / Obsidian 笔记摊在�
 - **在头显里**：捏星星阅读；手中地图出现时在空白处捏住可移动整个房间（地图没出来时不会误拖），双手拉开缩放；左手掌心朝向自己快速捏一下，可显示或收起菜单栏；笔记名字总画在星球前面，不会被挡住；捏住一颗星拖到另一颗上连线，
   并用 Quest 键盘或语音写下原因；左手边是思考墙，并排放的卡片成为一组，会告诉你共同话题、缺的那篇和一个问题；可以有多面墙（一个问题一面），转头看向墙时出现切换面板，可切换、新建、重命名、删除，「上墙」总是放到当前打开的那面；长笔记捏住正文向上拖即可往下读；
   「洞察」列出隐藏联系、值得追问、还没写的笔记和漂流的笔记；左手掌心朝向自己，「手中地图」出现在双手之间并固定在那里；双手同时捏住它即可旋转和缩放，大星图同步，捏着的时候掌心转开也不会消失，松手且掌心转开后收起；指一下某颗星就把它转到面前；卡片上「编辑」可按段落修改，捏文字任意处即可在光标处插入或删改；悬浮菜单栏可直接用手指点；
-  不进 VR 时是 2D 写作台：左边笔记列表，中间写或读，右边是它的联系，输入 [[ 会提示可链接的笔记，自动保存，可以用 Quest 桌面键盘输入；「星图」是平面 2D 图，拖动平移、滚轮或双指缩放、点选查看、双击打开；
+  不进 VR 时是 2D 写作台：左边笔记列表，中间写或读，右边是它的联系，输入 [[ 会提示可链接的笔记，自动保存，可以用 Quest 桌面键盘输入；「星图」是平面 2D 图，拖动平移、滚轮或双指缩放、点选查看、双击打开；第一次打开时有一段「导览」介绍全部功能（随时可点「导览」重看），进头显后也会一步步提示手势；界面语言跟随系统，中文系统显示中文，其余默认英文；
   混合现实下星图会放到你的真实桌面上，思考墙贴在左侧真实的墙前。
 - **数据**：都存在浏览器里（IndexedDB），可在入口页导入 zip/文件夹、导出 zip。
 - **探索**：卡片上「找路径」再捏另一颗星，显示最短链接路径；「更多」里有漫游、时光机、声音、动效、糯糯（陪伴小精灵，只在左下余光处，不挡视线）。

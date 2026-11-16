@@ -8,6 +8,6 @@ This is a small sample library about **how people learn and remember**. Every st
 Try this:
 - Pinch a star to read it.
 - Pinch a star and drag it onto another star to connect them, then say or type *why*.
-- Turn your left palm up for the menu: new idea, find, thinking wall, topics.
+- Turn your left palm towards you: a map of the room appears between your hands. The menu (new idea, find, thinking wall, insights) floats just below your view.
 
 Start anywhere. [[Memory]] and [[Sleep]] are good doors. When you are done, export the library as a .zip and open it in Obsidian or any Markdown editor.
