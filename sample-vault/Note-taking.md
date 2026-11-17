@@ -1,5 +1,5 @@
 ---
-created: 2026-04-07
+created: 2026-10-06
 ---
 # Note-taking
 

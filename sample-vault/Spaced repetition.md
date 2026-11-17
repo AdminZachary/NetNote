@@ -1,5 +1,5 @@
 ---
-created: 2026-03-28
+created: 2026-10-03
 ---
 # Spaced repetition
 

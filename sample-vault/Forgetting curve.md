@@ -1,5 +1,5 @@
 ---
-created: 2026-03-17
+created: 2026-09-30
 ---
 # Forgetting curve
 

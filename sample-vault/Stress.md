@@ -1,5 +1,5 @@
 ---
-created: 2026-07-25
+created: 2026-11-05
 ---
 # Stress
 

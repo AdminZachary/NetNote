@@ -1,5 +1,5 @@
 ---
-created: 2026-07-30
+created: 2026-11-07
 ---
 # Emotion and memory
 

@@ -1,5 +1,5 @@
 ---
-created: 2026-06-14
+created: 2026-10-25
 ---
 # Dreams and creativity
 

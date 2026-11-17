@@ -1,5 +1,5 @@
 ---
-created: 2026-04-28
+created: 2026-10-12
 ---
 # Illusion of competence
 

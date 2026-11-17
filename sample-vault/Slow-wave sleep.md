@@ -1,5 +1,5 @@
 ---
-created: 2026-05-24
+created: 2026-10-19
 ---
 # Slow-wave sleep
 
