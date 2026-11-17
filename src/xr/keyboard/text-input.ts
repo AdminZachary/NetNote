@@ -40,6 +40,14 @@ export function repairReplace(prev: string, prevCaret: number, next: string, dat
   return { text: prev.slice(0, at) + data + prev.slice(at), caret: at + data.length };
 }
 
+/** A one-line field: line breaks are taken out; a break typed at the cursor means "done". */
+export function singleLine(text: string, caret: number): { text: string; caret: number; submitted: boolean } {
+  const before = text.slice(0, caret);
+  const head = before.replace(/\r?\n/g, '');
+  const out = head + text.slice(caret).replace(/\r?\n/g, '');
+  return { text: out, caret: head.length, submitted: /\n$/.test(before) };
+}
+
 /** Remove the word (and spaces) just before the cursor. */
 export function deleteWordBefore(text: string, caret: number): { text: string; caret: number } {
   const head = text.slice(0, caret).replace(/(\s*\S+|\s+)$/u, '');
@@ -94,6 +102,10 @@ export class TextInput {
   private onSelection: (() => void) | null = null;
   /** headset mode: where what you type goes in (null: the field holds the whole text) */
   private segment: InsertSegment | null = null;
+  /** the field's value as we last read it (the headset keyboard may set it without an input event) */
+  private seen = '';
+  /** the keyboard was asked for: it may hold typed text it has not handed to the field yet */
+  private requested = false;
   /** Enter (without Shift) and Escape on a physical keyboard. */
   onSubmit: (() => void) | null = null;
   onCancel: (() => void) | null = null;
@@ -124,6 +136,7 @@ export class TextInput {
     doc.body.appendChild(this.field);
     this.field.addEventListener('input', (e) => {
       this.onTyped?.();
+      this.seen = this.field.value;
       if (this.segment) return this.sync();
       const fixed = repairReplace(this.state.text, this.state.caret, this.field.value, (e as InputEvent).data ?? null);
       if (fixed) {
@@ -158,6 +171,47 @@ export class TextInput {
     return this.state.keyboardOpen;
   }
 
+  /**
+   * Is the keyboard (probably) up for this text? In the headset the page loses focus while the
+   * system keyboard is shown, so focus alone says nothing: we count from the pinch that asked for it.
+   */
+  get typing(): boolean {
+    return this.active && (this.state.keyboardOpen || this.requested);
+  }
+
+  /**
+   * Pick up text the keyboard wrote into the field without telling us (call every frame). The Quest
+   * keyboard in a headset session shows what you type in its own preview line and hands it to the
+   * page only when you press Return or close it, sometimes by setting the value with no input event.
+   */
+  poll(): void {
+    if (!this.active || this.field.value === this.seen) return;
+    this.seen = this.field.value;
+    // handed over while the keyboard is no longer focused: it has been closed
+    if (this.env.document.activeElement !== this.field) this.requested = false;
+    this.onTyped?.();
+    this.sync();
+  }
+
+  /**
+   * Before saving: close the keyboard so it hands over what it still holds, and wait a moment for it.
+   * Resolves at once when nothing can be waiting (no headset session, keyboard never asked for).
+   */
+  async flush(timeoutMs = 450): Promise<void> {
+    if (!this.active || !this.requested || !this.env.session()) {
+      this.poll();
+      return;
+    }
+    const before = this.field.value;
+    this.field.blur();
+    const t0 = performance.now();
+    while (performance.now() - t0 < timeoutMs && this.field.value === before) {
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    this.requested = false;
+    this.poll();
+  }
+
   /** Is the Quest overlay keyboard available in the current session? */
   get systemKeyboard(): boolean {
     const s = this.env.session() as (XRSession & { isSystemKeyboardSupported?: boolean }) | undefined;
@@ -171,7 +225,9 @@ export class TextInput {
     this.multiline = multiline;
     this.listener = listener;
     this.segment = null;
+    this.requested = false;
     this.field.value = initial;
+    this.seen = initial;
     this.state = { text: initial, caret: initial.length, keyboardOpen: false };
     this.onKey = (e: KeyboardEvent): void => {
       if (!this.active || this.env.document.activeElement !== this.field) return;
@@ -201,15 +257,25 @@ export class TextInput {
    */
   showKeyboard(): void {
     if (!this.active) return;
+    // Pinching the text again must bring the keyboard back. If the field still has focus (the
+    // keyboard was dismissed, or the first focus came too late to open it), focusing it again does
+    // nothing at all, so let go of it first and take it again.
+    if (this.env.session() && this.env.document.activeElement === this.field) {
+      if (this.segment) this.sync();
+      this.field.blur();
+    }
     if (this.env.session()) {
       // headset: the keyboard writes its own buffer into the field; start it empty at the cursor
       if (!this.segment || this.env.document.activeElement !== this.field) {
         this.segment = InsertSegment.at(this.state.text, this.state.caret);
         this.field.value = '';
+        this.seen = '';
       }
+      this.requested = true;
     } else if (this.segment) {
       this.segment = null;
       this.field.value = this.state.text;
+      this.seen = this.field.value;
     }
     const focus = (): void => {
       this.field.focus({ preventScroll: true });
@@ -257,13 +323,15 @@ export class TextInput {
   /** Finish and return the text. */
   end(): string {
     if (!this.active) return '';
-    if (this.segment) this.sync();
+    if (this.field.value !== this.seen || this.segment) this.sync();
     const out = this.segment ? this.state.text : this.field.value;
     this.segment = null;
+    this.requested = false;
     this.active = false;
     this.listener = null;
     this.field.blur();
     this.field.value = '';
+    this.seen = '';
     if (this.onKey) this.env.document.removeEventListener('keydown', this.onKey);
     if (this.onSelection) {
       this.env.document.removeEventListener('selectionchange', this.onSelection);
@@ -280,6 +348,7 @@ export class TextInput {
     else {
       this.field.value = text;
       this.field.setSelectionRange(caret, caret);
+      this.seen = text;
     }
     this.state.text = text;
     this.state.caret = caret;
@@ -287,15 +356,33 @@ export class TextInput {
   }
 
   private sync(): void {
+    this.seen = this.field.value;
     if (this.segment) {
       const r = this.segment.apply(this.field.value, this.field.selectionStart ?? this.field.value.length);
       this.state.text = r.text;
       this.state.caret = r.caret;
+    } else {
+      this.state.text = this.field.value;
+      this.state.caret = this.field.selectionStart ?? this.field.value.length;
+    }
+    // One line (a link's reason, a name): the Quest keyboard's Return key writes a line break into
+    // the field without any key event. Take it out and treat it as "done".
+    if (!this.multiline && this.state.text.includes('\n')) {
+      const r = singleLine(this.state.text, this.state.caret);
+      this.state.text = r.text;
+      this.state.caret = r.caret;
+      if (this.segment) {
+        // the keyboard keeps its own buffer (break included): what it already holds is not typed again
+        this.segment = InsertSegment.at(r.text, r.caret, this.field.value);
+      } else {
+        this.field.value = r.text;
+        this.field.setSelectionRange(r.caret, r.caret);
+        this.seen = r.text;
+      }
       this.emit();
+      if (r.submitted) queueMicrotask(() => this.active && this.onSubmit?.());
       return;
     }
-    this.state.text = this.field.value;
-    this.state.caret = this.field.selectionStart ?? this.field.value.length;
     this.emit();
   }
 

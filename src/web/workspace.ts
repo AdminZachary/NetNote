@@ -613,10 +613,20 @@ export class Workspace {
     const text = this.els.text;
     const it = p?.items[i];
     if (!p || !text || !it) return;
-    const r = completeLink(text.value, p.start, text.selectionStart, it.name);
-    text.value = r.text;
-    text.setSelectionRange(r.caret, r.caret);
+    const caret = text.selectionStart;
+    const r = completeLink(text.value, p.start, caret, it.name);
+    // replace only the unfinished link (not the whole value), so the on-screen keyboard keeps its
+    // place and the text after the cursor is untouched
+    const tailKept = r.text.length - r.caret; // text after the new caret, already in the field
+    const replaceTo = text.value.length - tailKept;
     text.focus();
+    text.setSelectionRange(p.start, replaceTo);
+    const ins = r.text.slice(p.start, r.caret);
+    const inserted = typeof document.execCommand === 'function' && document.execCommand('insertText', false, ins);
+    if (!inserted || text.value !== r.text) {
+      text.value = r.text;
+    }
+    text.setSelectionRange(r.caret, r.caret);
     this.closePick();
     this.dirty = true;
     this.showStatus();
@@ -626,6 +636,9 @@ export class Workspace {
   private onTextKey(e: KeyboardEvent): void {
     const p = this.pick;
     if (!p) return;
+    // a key that finishes a word being composed (Chinese/Japanese input, a headset keyboard's
+    // suggestions) belongs to the keyboard, not to the link picker
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       p.sel = (p.sel + (e.key === 'ArrowDown' ? 1 : -1) + p.items.length) % p.items.length;

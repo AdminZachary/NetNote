@@ -294,7 +294,14 @@ async function immersive(browser) {
 
   await page.evaluate(() => window.netnote.app.onComposer('type'));
   await page.waitForTimeout(200);
-  await page.keyboard.type('both are about retrieval');
+  await page.keyboard.type('both are ');
+  // the Quest keyboard keeps the rest in its own preview line and hands it over only as it closes,
+  // by setting the field's value without an input event: Save must still get every word
+  await page.evaluate(() => {
+    const f = document.querySelector('textarea[aria-label="text input"]');
+    f.addEventListener('blur', () => (f.value = 'both are about retrieval'), { once: true });
+  });
+  check('while the keyboard is up, the writing card says so', await page.evaluate(() => window.netnote.app.input.typing));
   await page.evaluate(() => window.netnote.app.onComposer('save'));
   await page.waitForTimeout(800);
   const raw = await page.evaluate((a) => window.netnote.library.vault.notes.get(a).raw, pair[0]);

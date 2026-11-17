@@ -87,7 +87,7 @@ export class Composer extends Surface {
       this.textBox.draw(ctx, box, m.text, m.caret, this.caretOn && m.keyboardOpen);
     } else {
       ctx.fillStyle = COLORS.textFaint;
-      ctx.fillText(fit(ctx, m.keyboardOpen ? m.placeholder : tr.typeHere, box.w - 48), box.x + 24, box.y + 36);
+      ctx.fillText(fit(ctx, m.keyboardOpen ? m.placeholder || tr.typingNow : tr.typeHere, box.w - 48), box.x + 24, box.y + 36);
     }
 
     ctx.font = font(24, 400);

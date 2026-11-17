@@ -56,7 +56,7 @@ import {
 import { COLORS, ERGO } from './theme';
 import { Composer } from './ui/composer';
 import { Dock, type DockAction } from './ui/dock';
-import { Hint } from './ui/hint';
+import { Hint, type Gesture } from './ui/hint';
 import { NoteCard } from './ui/note-card';
 import { SearchPanel } from './ui/search-panel';
 import { Surface, type XRPointerEvent } from './ui/surface';
@@ -534,6 +534,7 @@ export class NetNoteApp {
     for (const s of [this.dock, this.tools, this.composer, this.editor, this.search, this.insightsPanel, this.wallBar, ...this.cards, ...this.tags]) s.update();
     this.hint.update();
     this.hint.tick(dt);
+    this.input.poll();
     if (this.composer.mesh.visible) this.composer.tick(dt);
     if (this.editor.mesh.visible) this.editor.tick(dt);
     for (const c of this.cards) c.glide(dt);
@@ -562,10 +563,11 @@ export class NetNoteApp {
       this.tourFinishedAt = 0;
       this.nextTourHint();
     }
-    // the hint floats above the graph, facing you
+    // the guide floats above the graph, a little closer than the stars, facing you
     const fwd = FORWARD.clone().applyQuaternion(new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), this.home.yaw));
-    this.hint.mesh.position.copy(this.home.position).addScaledVector(fwd, 1.6);
-    this.hint.mesh.position.y = this.home.position.y + 0.42;
+    this.hint.mesh.position.copy(this.home.position).addScaledVector(fwd, 1.45);
+    this.hint.mesh.position.y = this.home.position.y + 0.36;
+    if (this.immersive) this.hint.setController(!this.handsActive());
     faceTowards(this.hint.mesh, eye);
   }
 
@@ -1041,10 +1043,10 @@ export class NetNoteApp {
         placeholder,
         text: this.input.text,
         caret: this.input.caret,
-        keyboardOpen: this.input.keyboardOpen,
+        keyboardOpen: this.input.typing,
         skippable,
         accent,
-        hint: tr.keyboardHint,
+        hint: this.immersive && this.input.typing ? tr.keyboardReturnHint : tr.keyboardHint,
       });
     this.input.begin(initial, render, { multiline: mode.kind !== 'reason' && mode.kind !== 'rename' && mode.kind !== 'wallName' });
     this.input.onSubmit = () => void this.saveComposer();
@@ -1089,7 +1091,7 @@ export class NetNoteApp {
         index: mode.index,
         text: this.input.text,
         caret: this.input.caret,
-        keyboardOpen: this.input.keyboardOpen,
+        keyboardOpen: this.input.typing,
         dirty: mode.dirty,
       });
     };
@@ -1163,6 +1165,13 @@ export class NetNoteApp {
   }
 
   private async saveEditor(): Promise<void> {
+    if (this.writeMode?.kind !== 'edit' || this.saving) return;
+    this.saving = true;
+    try {
+      await this.input.flush();
+    } finally {
+      this.saving = false;
+    }
     const mode = this.writeMode;
     if (mode?.kind !== 'edit') return;
     mode.blocks[mode.index] = this.input.end();
@@ -1206,7 +1215,17 @@ export class NetNoteApp {
     this.writeMode = null;
   }
 
+  private saving = false;
+
   private async saveComposer(skipText = false): Promise<void> {
+    if (this.saving) return;
+    // the headset keyboard may still hold what was typed: let it hand the text over first
+    this.saving = true;
+    try {
+      await this.input.flush();
+    } finally {
+      this.saving = false;
+    }
     const mode = this.writeMode;
     const text = this.input.end().trim();
     this.closeComposer();
@@ -2129,7 +2148,7 @@ export class NetNoteApp {
     const render = (): void => {
       const q = this.input.text;
       const results = vault.search(q, 7);
-      this.search.set(q, results, this.input.keyboardOpen);
+      this.search.set(q, results, this.input.typing);
       this.graph.setHighlight(results.map((r) => r.path));
     };
     this.writeMode = { kind: 'search' };
@@ -2192,18 +2211,19 @@ export class NetNoteApp {
    */
   private nextTourHint(): void {
     const tr = t();
-    const order: [keyof NetNoteApp['tour'], string][] = [
-      ['read', tr.tipPinch],
-      ['map', tr.xrTourMap],
-      ['move', tr.tipDrag],
-      ['connect', tr.tipConnect],
-      ['wall', tr.xrTourWall],
-      ['insights', tr.xrTourInsights],
-      ['menu', tr.tipMenu],
+    // each step shows the movement itself (hand or controller), not only words
+    const order: [keyof NetNoteApp['tour'], string, Gesture][] = [
+      ['read', tr.tipPinch, 'pinch'],
+      ['map', tr.xrTourMap, 'palm'],
+      ['move', tr.tipDrag, 'palm'],
+      ['connect', tr.tipConnect, 'drag'],
+      ['wall', tr.xrTourWall, 'look'],
+      ['insights', tr.xrTourInsights, 'tap'],
+      ['menu', tr.tipMenu, 'menu'],
     ];
     const i = order.findIndex(([k]) => !this.tour[k]);
     if (!this.immersive) this.hint.show('');
-    else if (i >= 0) this.hint.show(order[i]![1], `${i + 1}/${order.length}`);
+    else if (i >= 0) this.hint.show(order[i]![1], `${i + 1}/${order.length}`, order[i]![2]);
     else if (this.tourFinishedAt && performance.now() - this.tourFinishedAt < 5000) this.hint.show(tr.xrTourDone);
     else this.hint.show('');
   }

@@ -118,7 +118,10 @@ export class IdbStore implements VaultStore {
       }
       if (!db.objectStoreNames.contains('state')) db.createObjectStore('state');
     };
-    return new IdbStore(await req(open));
+    const store = new IdbStore(await req(open));
+    // ask the browser to keep this data when space runs low (it is the only copy until exported)
+    void requestPersistence();
+    return store;
   }
 
   close(): void {
@@ -177,5 +180,17 @@ export class IdbStore implements VaultStore {
     const tx = this.db.transaction('state', 'readwrite');
     tx.objectStore('state').put(value, vaultId + '\u0000' + key);
     await done(tx);
+  }
+}
+
+/** Ask for persistent storage so the browser never clears the notes on its own. Best effort. */
+export async function requestPersistence(nav: Pick<Navigator, 'storage'> | undefined = globalThis.navigator): Promise<boolean> {
+  try {
+    const s = nav?.storage;
+    if (!s?.persist) return false;
+    if (await s.persisted?.()) return true;
+    return await s.persist();
+  } catch {
+    return false;
   }
 }

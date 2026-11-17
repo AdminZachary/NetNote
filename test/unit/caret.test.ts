@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InsertSegment, deleteWordBefore, repairReplace } from '../../src/xr/keyboard/text-input';
+import { InsertSegment, deleteWordBefore, repairReplace, singleLine } from '../../src/xr/keyboard/text-input';
 import { caretFromX, caretSpot, layoutText, scrollForCaret } from '../../src/xr/ui/text-layout';
 
 const ctx = { measureText: (s: string) => ({ width: s.length * 10 }) } as unknown as CanvasRenderingContext2D;
@@ -79,5 +79,14 @@ describe('detectLocale', () => {
     expect(detectLocale(['en-US', 'zh-CN'])).toBe('en');
     expect(detectLocale(['fr-FR'])).toBe('en');
     expect(detectLocale([])).toBe('en');
+  });
+});
+
+describe('singleLine (one-line fields and the Quest Return key)', () => {
+  it('takes a break typed at the cursor out and submits', () => {
+    expect(singleLine('both about memory\n', 18)).toEqual({ text: 'both about memory', caret: 17, submitted: true });
+  });
+  it('takes pasted breaks out without submitting', () => {
+    expect(singleLine('a\nb', 3)).toEqual({ text: 'ab', caret: 2, submitted: false });
   });
 });
