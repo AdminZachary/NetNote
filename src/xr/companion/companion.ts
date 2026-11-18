@@ -13,7 +13,9 @@ import {
   CanvasTexture,
   Color,
   DataTexture,
+  DirectionalLight,
   Group,
+  HemisphereLight,
   Mesh,
   MeshBasicMaterial,
   MeshToonMaterial,
@@ -160,6 +162,13 @@ export class Companion {
 
   constructor() {
     this.group.name = 'companion';
+    // the scene has no lights (everything else is unlit), so Mochi brings its own soft key light;
+    // without it the toon body renders black
+    const sky = new HemisphereLight('#ffffff', '#b9a7d8', 1.6);
+    const key = new DirectionalLight('#ffffff', 1.4);
+    key.position.set(0.6, 1.6, 2);
+    key.target.position.set(0, 0.4, 0);
+    this.group.add(sky, key, key.target);
     this.skin = new MeshToonMaterial({ color: BODY, gradientMap: toonRamp() });
     const torso = new Mesh(new SphereGeometry(0.5, 28, 20), this.skin);
     torso.scale.set(1, 0.86, 0.92);
@@ -242,9 +251,11 @@ export class Companion {
     else this.group.position.lerp(at, follow(4, dt));
     this.group.scale.setScalar(size * (0.6 + 0.4 * this.fade));
     // face you, glancing a little towards what it talks about
-    const target = eye.clone();
-    if (look) target.lerp(look, 0.3);
-    this.group.lookAt(target.x, this.group.position.y, target.z);
+    // (blend directions, not points: a note far behind it must not turn its back on you)
+    const pos = this.group.position;
+    const dir = new Vector3(eye.x - pos.x, 0, eye.z - pos.z).normalize();
+    if (look) dir.multiplyScalar(0.75).addScaledVector(new Vector3(look.x - pos.x, 0, look.z - pos.z).normalize(), 0.25);
+    this.group.lookAt(pos.x + dir.x, pos.y, pos.z + dir.z);
 
     this.tint.lerp(new Color(MOOD_TINT[mood]), follow(3, dt));
     this.skin.color.copy(this.tint);
