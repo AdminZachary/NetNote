@@ -106,6 +106,8 @@ export class TextInput {
   private seen = '';
   /** the keyboard was asked for: it may hold typed text it has not handed to the field yet */
   private requested = false;
+  /** Return was pressed and we are waiting for the keyboard's text before finishing */
+  private submitPending = false;
   /** Enter (without Shift) and Escape on a physical keyboard. */
   onSubmit: (() => void) | null = null;
   onCancel: (() => void) | null = null;
@@ -212,6 +214,28 @@ export class TextInput {
     this.poll();
   }
 
+  /** Return was pressed: wait for the keyboard to hand over its text, then finish (once). */
+  private async submitWhenSettled(timeoutMs = 400): Promise<void> {
+    if (this.submitPending) return;
+    this.submitPending = true;
+    const before = this.field.value;
+    const t0 = performance.now();
+    while (performance.now() - t0 < timeoutMs && this.field.value === before && this.active) {
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    // the keyboard closes on Return once it has handed its text over: nothing more to wait for on save
+    if (this.field.value !== before) this.requested = false;
+    // one more beat: a line break and the text can arrive as two writes
+    await new Promise((r) => setTimeout(r, 30));
+    if (!this.active) {
+      this.submitPending = false;
+      return;
+    }
+    this.poll(); // while still pending, so a line break it brings does not finish a second time
+    this.submitPending = false;
+    if (this.active) this.onSubmit?.();
+  }
+
   /** Is the Quest overlay keyboard available in the current session? */
   get systemKeyboard(): boolean {
     const s = this.env.session() as (XRSession & { isSystemKeyboardSupported?: boolean }) | undefined;
@@ -226,6 +250,7 @@ export class TextInput {
     this.listener = listener;
     this.segment = null;
     this.requested = false;
+    this.submitPending = false;
     this.field.value = initial;
     this.seen = initial;
     this.state = { text: initial, caret: initial.length, keyboardOpen: false };
@@ -236,6 +261,13 @@ export class TextInput {
         e.preventDefault();
         this.onCancel?.();
       } else if ((e.key === 'Enter' && (!this.multiline || e.metaKey || e.ctrlKey)) || (e.key.toLowerCase() === 's' && (e.metaKey || e.ctrlKey))) {
+        if (e.key === 'Enter' && (this.env.session() || e.isComposing || e.keyCode === 229)) {
+          // The headset keyboard (and an input method finishing a word) sends Return BEFORE it hands
+          // its text to the field. Finishing now would close the field with nothing typed in it, and
+          // the text would arrive after we stopped listening. Let it land, then finish.
+          void this.submitWhenSettled();
+          return;
+        }
         e.preventDefault();
         this.onSubmit?.();
       }
@@ -380,7 +412,7 @@ export class TextInput {
         this.seen = r.text;
       }
       this.emit();
-      if (r.submitted) queueMicrotask(() => this.active && this.onSubmit?.());
+      if (r.submitted && !this.submitPending) queueMicrotask(() => this.active && !this.submitPending && this.onSubmit?.());
       return;
     }
     this.emit();

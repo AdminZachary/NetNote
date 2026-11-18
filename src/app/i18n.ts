@@ -189,6 +189,7 @@ const en = {
   tipPinch: 'Pinch a star to read it',
   tipDrag: 'Turn your left palm up for the map, then pinch empty space and move your hand to move the room',
   tipTwoHands: 'Pinch with both hands and pull apart to zoom',
+  tipMapHold: 'With the map up, pinch it with both hands: pull apart to zoom, turn to rotate your whole library',
   tipConnect: 'Pinch a star and drag it onto another to connect them',
   tipMenu: 'The menu floats just below your view; left palm towards you and a quick pinch shows or hides it',
   // insight phrasing
@@ -491,6 +492,7 @@ const zh: Dict = {
   tipPinch: '捏一下星星就能阅读',
   tipDrag: '左手掌心翻向自己调出地图，再在空白处捏住并移动手，就能移动整个房间',
   tipTwoHands: '双手同时捏住再拉开，可以缩放',
+  tipMapHold: '调出地图后，用双手捏住它：拉开就放大，转动就旋转整个资料库',
   tipConnect: '捏住一颗星拖到另一颗上，就能把它们连起来',
   tipMenu: '菜单在视线下方；左手掌心朝向自己快速捏一下，可以显示或收起',
   sharedLinks: (names) => `都链接了${names.map((n) => `「${n}」`).join('')}`,

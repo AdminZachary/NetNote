@@ -14,7 +14,7 @@ const H = 330;
 const GLYPH = 290;
 
 /** Which movement the animation shows. */
-export type Gesture = 'none' | 'pinch' | 'drag' | 'palm' | 'look' | 'menu' | 'tap';
+export type Gesture = 'none' | 'pinch' | 'drag' | 'palm' | 'look' | 'menu' | 'tap' | 'twohand';
 
 export class Hint extends Surface {
   text = '';
@@ -369,6 +369,46 @@ function drawGesture(ctx: Ctx, g: Gesture, ctrl: boolean, cx: number, cy: number
       ctx.beginPath();
       ctx.arc(cx, cy + 40, 90, -Math.PI / 2, -Math.PI / 2 - (Math.PI / 3) * clamp01(t / 0.6), true);
       ctx.stroke();
+      break;
+    }
+    case 'twohand': {
+      // both hands pinch the little map, pull apart and turn: the library grows and turns with them
+      const period = 3.4;
+      const ph = (time % period) / period;
+      const grab = ph < 0.12 ? ease(ph / 0.12) : ph < 0.8 ? 1 : 1 - ease(clamp01((ph - 0.8) / 0.1));
+      const k = ph < 0.15 ? 0 : ph < 0.7 ? ease((ph - 0.15) / 0.55) : ph < 0.85 ? 1 : 1 - ease((ph - 0.85) / 0.15);
+      const spread = 52 + 38 * k;
+      const rot = -0.45 * k;
+      const scale = 0.75 + 0.45 * k;
+      const pts: [number, number][] = [
+        [-30, -12],
+        [0, -36],
+        [30, -8],
+        [-8, 14],
+        [22, 22],
+      ];
+      const mx = cx;
+      const my = cy - 70;
+      const at = ([x, y]: [number, number]): [number, number] => [
+        mx + (x * Math.cos(rot) - y * Math.sin(rot)) * scale,
+        my + (x * Math.sin(rot) + y * Math.cos(rot)) * scale,
+      ];
+      ctx.strokeStyle = 'rgba(94,231,255,0.55)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      pts.map(at).forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      ctx.stroke();
+      for (const q of pts) {
+        const [x, y] = at(q);
+        star(ctx, x, y, 7, COLORS.accent, grab * 0.4);
+      }
+      if (ctrl) {
+        controller(ctx, mx - spread - 10, cy + 55, 0.8, grab);
+        controller(ctx, mx + spread + 10, cy + 55, 0.8, grab);
+      } else {
+        hand(ctx, mx - spread - 10, cy + 55, 0.8, grab, 0, true);
+        hand(ctx, mx + spread + 10, cy + 55, 0.8, grab);
+      }
       break;
     }
     case 'none':

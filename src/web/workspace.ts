@@ -181,7 +181,7 @@ export class Workspace {
     search.className = 'nn-search';
     search.type = 'search';
     search.setAttribute('data-testid', 'ws-search');
-    search.addEventListener('input', () => {
+    onValue(search, () => {
       this.query = search.value;
       this.renderList();
       if (this.graphing) this.syncGraph();
@@ -348,14 +348,21 @@ export class Workspace {
     title.setAttribute('data-testid', 'ws-title');
     title.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
-        e.preventDefault();
-        title.blur();
+        // a headset or input-method keyboard hands its text over right after Return: let it land
+        if (e.isComposing || e.keyCode === 229) setTimeout(() => title.blur(), 80);
+        else {
+          e.preventDefault();
+          title.blur();
+        }
       } else if (e.key === 'Escape') {
         title.value = note.name;
         title.blur();
       }
     });
+    // renamed when you leave the field (Return, a click elsewhere, or closing the keyboard), however
+    // the text got there: some keyboards set the value without the events a desktop keyboard sends
     title.addEventListener('change', () => void this.rename(title.value));
+    title.addEventListener('blur', () => setTimeout(() => void this.rename(title.value), 60));
     const status = this.el('span', 'nn-status') as HTMLSpanElement;
     status.setAttribute('aria-live', 'polite');
     const editBtn = this.button(tr.wsEdit, () => this.setMode('edit'), 'nn-small' + (this.mode === 'edit' ? ' nn-on' : ''), 'ws-edit');
@@ -400,7 +407,7 @@ export class Workspace {
       text.spellcheck = true;
       text.setAttribute('data-testid', 'ws-text');
       text.setAttribute('aria-label', note.name);
-      text.addEventListener('input', () => {
+      onValue(text, () => {
         this.dirty = true;
         this.showStatus();
         this.scheduleSave();
@@ -768,6 +775,31 @@ export class Workspace {
 }
 
 /** The first line of a note worth showing under its name (skipping the title heading). */
+/**
+ * Call `changed` whenever the field's text changes, however it changed. A desktop keyboard sends an
+ * input event per key; the headset's keyboard and input methods may only finish a composition, or set
+ * the value with no event at all, so we also listen for the end of a composition and key releases, and
+ * look at the value now and then while the field has focus.
+ */
+export function onValue(el: HTMLInputElement | HTMLTextAreaElement, changed: () => void): void {
+  let last = el.value;
+  const check = (): void => {
+    if (el.value === last) return;
+    last = el.value;
+    changed();
+  };
+  for (const type of ['input', 'compositionend', 'keyup', 'change', 'blur']) el.addEventListener(type, check);
+  let timer: ReturnType<typeof setInterval> | null = null;
+  el.addEventListener('focus', () => {
+    last = el.value;
+    if (timer === null) timer = setInterval(check, 250);
+  });
+  el.addEventListener('blur', () => {
+    if (timer !== null) clearInterval(timer);
+    timer = null;
+  });
+}
+
 function firstLine(content: string, name: string): string {
   for (const l of content.replace(/^\ufeff?---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').split('\n')) {
     if (/^#\s/.test(l)) continue;

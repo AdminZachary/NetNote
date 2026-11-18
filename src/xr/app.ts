@@ -1868,6 +1868,7 @@ export class NetNoteApp {
       root.scale.setScalar(want);
       root.updateMatrixWorld();
       this.mapHold.prev = v;
+      this.tourDone('move');
     } else if (this.mapHold) {
       this.mapHold = null;
       this.minimap.held = false;
@@ -2215,7 +2216,7 @@ export class NetNoteApp {
     const order: [keyof NetNoteApp['tour'], string, Gesture][] = [
       ['read', tr.tipPinch, 'pinch'],
       ['map', tr.xrTourMap, 'palm'],
-      ['move', tr.tipDrag, 'palm'],
+      ['move', tr.tipMapHold, 'twohand'],
       ['connect', tr.tipConnect, 'drag'],
       ['wall', tr.xrTourWall, 'look'],
       ['insights', tr.xrTourInsights, 'tap'],

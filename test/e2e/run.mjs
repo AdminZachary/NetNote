@@ -186,6 +186,42 @@ async function desktop(browser) {
   await page.waitForTimeout(300);
   check('edits made in the headset appear here', (await page.inputValue('[data-testid=ws-text]')).includes('Added in the headset.'));
 
+  // fields filled by a headset or input-method keyboard: the value can change with no input event
+  const quiet = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const s = document.querySelector('[data-testid=ws-search]');
+    s.focus();
+    s.value = 'Caffei';
+    await wait(450);
+    const listed = Array.from(document.querySelectorAll('.nn-item')).map((b) => b.getAttribute('data-path'));
+    s.value = '';
+    s.dispatchEvent(new window.Event('input', { bubbles: true }));
+    s.blur();
+    return { listed };
+  });
+  check(
+    '2D Find reacts to text a keyboard sets without an input event',
+    quiet.listed.length > 0 && quiet.listed.every((p) => /caffei/i.test(p)),
+    JSON.stringify(quiet),
+  );
+  await page.click('[data-path="Walking.md"]');
+  await page.waitForTimeout(200);
+  await page.evaluate(() => {
+    const t = document.querySelector('[data-testid=ws-title]');
+    t.focus();
+    t.value = 'Walking slowly'; // no input or change event
+    t.blur();
+  });
+  await page.waitForTimeout(700);
+  const renamed2d = await page.evaluate(() => window.netnote.library.vault.notes.has('Walking slowly.md'));
+  check('2D rename takes a name a keyboard set without events', renamed2d);
+  if (renamed2d) {
+    await page.evaluate(() => window.netnote.library.rename('Walking slowly.md', 'Walking'));
+    await page.waitForTimeout(300);
+    await page.click('[data-path="Walking.md"]');
+    await page.waitForTimeout(200);
+  }
+
   // the star map here is a flat 2D map (the 3D one is for the headset)
   await page.click('[data-testid=ws-graph]');
   await page.waitForSelector('[data-testid=graph2d] canvas', { state: 'visible' });
@@ -344,6 +380,43 @@ async function immersive(browser) {
       mid.caret === 'Walking XY'.length,
     JSON.stringify(mid),
   );
+  // Every one-line field (Find, a new name, a wall's name, a link's reason): the headset keyboard
+  // sends Return BEFORE it hands its text over (with no input event). Finishing on Return must wait
+  // for the text, or the field closes empty and the words arrive after nobody is listening.
+  const oneLine = await page.evaluate(async () => {
+    const { app, library } = window.netnote;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const returnThenText = async (text) => {
+      const f = app.input.field;
+      f.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await wait(70);
+      f.value = text; // the keyboard's buffer, handed over late and silently
+      await wait(1200);
+    };
+    // Find: Return opens the first match of what was typed
+    app.select('Walking.md');
+    await wait(300);
+    app.openSearch();
+    app.onSearch('type');
+    await returnThenText('Caffeine');
+    const find = { open: app.search.mesh.visible, selected: app.graph.selected };
+    // Rename (one line): what you typed after the name is kept
+    app.openComposer({ kind: 'rename', path: 'Habits.md' }, 'Habits');
+    app.onComposer('type');
+    await returnThenText(' and routines');
+    const renamed = library.vault.notes.has('Habits and routines.md');
+    if (renamed) {
+      await library.rename('Habits and routines.md', 'Habits');
+      await wait(300);
+    }
+    return { find, renamed, composer: app.composer.mesh.visible };
+  });
+  check(
+    'Find in the headset: typing then Return opens what you typed (text handed over late)',
+    !oneLine.find.open && oneLine.find.selected === 'Caffeine.md',
+    JSON.stringify(oneLine.find),
+  );
+  check('Rename in the headset: typing then Return keeps the new name (text handed over late)', oneLine.renamed && !oneLine.composer, JSON.stringify(oneLine));
   // a long note: pinch the text and drag it up to read on (and flick it: it carries on)
   const scrolled = await page.evaluate(async () => {
     const { app, library } = window.netnote;
@@ -931,6 +1004,7 @@ async function handsDirect(browser) {
     `zoom ×${(hold.s1 / hold.s0).toFixed(2)}, turned ${((hold.turned * 180) / Math.PI).toFixed(0)}°`,
   );
   check('while both hands still pinch, the map stays even with the palm turned away', hold.keptWhileHeld);
+  check("the guide's map step (3/7) is done once you zoom or turn the map with both hands", await page.evaluate(() => window.netnote.app.tour.move === true));
   check('letting go with the palm turned away puts the map away', hold.goneAfter, JSON.stringify(hold));
   await palm(true);
   await page.waitForTimeout(1000);
