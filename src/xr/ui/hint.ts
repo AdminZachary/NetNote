@@ -333,14 +333,13 @@ function drawGesture(ctx: Ctx, g: Gesture, ctrl: boolean, cx: number, cy: number
       break;
     }
     case 'menu': {
-      // left palm towards you, then a quick pinch of the right hand: the menu bar shows
+      // left palm towards you, then a quick pinch of that same left hand: the menu bar shows
       const period = 3.0;
       const ph = (time % period) / period;
       const turn = ph < 0.3 ? ease(ph / 0.3) : ph < 0.85 ? 1 : 1 - ease((ph - 0.85) / 0.15);
       const p = ph > 0.4 && ph < 0.55 ? Math.sin(((ph - 0.4) / 0.15) * Math.PI) : 0;
-      hand(ctx, cx - 62, cy + 50, 0.85, 0, turn, true);
-      if (ctrl) controller(ctx, cx + 70, cy + 55, 0.85, p);
-      else hand(ctx, cx + 70, cy + 55, 0.85, p);
+      if (ctrl) controller(ctx, cx, cy + 55, 0.85, p);
+      else hand(ctx, cx, cy + 50, 0.95, p, turn, true);
       if (ph > 0.55 && ph < 0.95) {
         ctx.globalAlpha = Math.min(1, (ph - 0.55) / 0.08);
         roundRect(ctx, cx - 110, cy - 115, 220, 44, 22);

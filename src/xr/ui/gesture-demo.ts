@@ -336,18 +336,16 @@ export class GestureDemo {
         break;
       }
       case 'menu': {
-        // left palm towards you, then a quick pinch of the right hand: the menu bar shows
+        // the left hand alone: palm towards you, then a quick pinch of that same hand toggles the menu bar
         const period = 3.0;
         const ph = (t % period) / period;
         const turn = ph < 0.3 ? ease(ph / 0.3) : ph < 0.85 ? 1 : 1 - ease((ph - 0.85) / 0.15);
-        const p = ph > 0.4 && ph < 0.55 ? Math.sin(((ph - 0.4) / 0.15) * Math.PI) : 0;
-        L.root.visible = R.root.visible = this.bar.visible = true;
-        L.root.position.set(-0.06, -0.04, 0.04);
+        const p = ph > 0.36 && ph < 0.6 ? Math.sin(((ph - 0.36) / 0.24) * Math.PI) : 0;
+        L.root.visible = this.bar.visible = true;
+        R.root.visible = false;
+        L.root.position.set(0, -0.04, 0.04);
         L.root.rotation.y = Math.PI * (1 - turn);
-        L.pinch(0, true);
-        R.root.position.set(0.07, -0.04, 0.05);
-        R.root.rotation.set(-0.2, 0.4, 0);
-        R.pinch(p);
+        L.pinch(p, true);
         this.bar.position.set(0, 0.07, 0);
         this.bar.material.opacity = ph > 0.55 && ph < 0.95 ? 0.45 * Math.min(1, (ph - 0.55) / 0.08) : 0;
         break;

@@ -1836,7 +1836,10 @@ export class NetNoteApp {
       if (h === 'left') {
         if (st.on && !was) this.menuPinch = this.wasPalmUp && !this.pinches.right.on ? { t: performance.now(), spoiled: false } : null;
         else if (!st.on && was && this.menuPinch) {
-          if (!this.menuPinch.spoiled && performance.now() - this.menuPinch.t < 650) this.setDockHidden(!this.dockHidden);
+          if (!this.menuPinch.spoiled && performance.now() - this.menuPinch.t < 650) {
+            this.setDockHidden(!this.dockHidden);
+            this.tourDone('menu');
+          }
           this.menuPinch = null;
         }
       }
