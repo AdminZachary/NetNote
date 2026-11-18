@@ -7,6 +7,7 @@
 import { t } from '../../app/i18n';
 import { COLORS } from '../theme';
 import { font, roundRect, wrap, type Ctx } from './draw';
+import { GestureDemo } from './gesture-demo';
 import { Surface } from './surface';
 
 const W = 1800;
@@ -25,11 +26,16 @@ export class Hint extends Surface {
   private fade = 0;
   private time = 0;
   private frameAcc = 0;
+  /** the same movement in 3D: ghost hands under the card, and what the scene does in answer */
+  readonly demo = new GestureDemo();
 
   constructor(widthM = 1.25) {
     super(widthM, W, H);
     this.mesh.name = 'hint';
     this.mesh.raycast = () => undefined; // never blocks a pinch
+    this.demo.root.position.set(0, -((widthM * H) / W) / 2 - 0.155, 0.1);
+    this.demo.root.scale.setScalar(1.25);
+    this.mesh.add(this.demo.root);
   }
 
   show(text: string, step = '', gesture: Gesture = 'none'): void {
@@ -40,12 +46,15 @@ export class Hint extends Surface {
     this.fade = 0;
     this.time = 0;
     this.mesh.visible = !!text;
+    this.demo.set(text && !this.controller ? this.gesture : 'none');
     this.invalidate();
   }
 
   setController(on: boolean): void {
     if (on === this.controller) return;
     this.controller = on;
+    // the ghost hands show hand movements; with controllers the card's own drawing shows the trigger
+    this.demo.set(this.text && !on ? this.gesture : 'none');
     this.invalidate();
   }
 
@@ -56,6 +65,7 @@ export class Hint extends Surface {
     }
     if (!this.mesh.visible || this.gesture === 'none') return;
     this.time += dt;
+    this.demo.update(dt);
     // redraw the animation at ~30 fps: smooth enough, and cheap on the texture upload
     this.frameAcc += dt;
     if (this.frameAcc > 1 / 30) {
