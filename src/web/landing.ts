@@ -187,17 +187,18 @@ export class Landing {
     this.busy = true;
     this.toast(t().importing);
     try {
-      const imported = await readFileList(Array.from(files));
+      const skipped: string[] = [];
+      const imported = await readFileList(Array.from(files), (p) => skipped.push(p));
       const notes = imported.filter((f) => f.content !== undefined).length;
       if (!notes) {
-        this.toast(t().importEmpty);
+        this.toast(skipped.length ? t().importUnreadable(skipped.length) : t().importEmpty);
         return;
       }
       const first = files[0] as File & { webkitRelativePath?: string };
-      const name = (first.webkitRelativePath?.split('/')[0] || label || first.name).replace(/\.zip$/i, '');
+      const name = (first.webkitRelativePath?.split('/')[0] || label || first.name).replace(/\.(zip|md|markdown|txt|canvas)$/i, '');
       const id = await this.deps.library.add({ name, origin: 'import', files: imported });
       await this.deps.open(id);
-      this.toast(t().imported(notes));
+      this.toast(t().imported(notes) + (skipped.length ? ' · ' + t().importUnreadable(skipped.length) : ''));
     } catch (e) {
       this.toast(e instanceof Error ? e.message : String(e));
     } finally {

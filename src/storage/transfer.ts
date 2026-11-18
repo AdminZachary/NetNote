@@ -42,19 +42,27 @@ export function readZip(data: Uint8Array, now = Date.now()): ImportedFile[] {
   return stripCommonRoot(out);
 }
 
-/** Files from `<input type=file webkitdirectory>` or a drop. */
-export async function readFileList(files: Iterable<File>): Promise<ImportedFile[]> {
+/**
+ * Files from `<input type=file webkitdirectory>` or a drop. A file the browser cannot read (a cloud
+ * placeholder not yet downloaded, a file changed or removed after it was picked) is skipped and
+ * reported through `onSkip`, so one bad file does not stop the rest.
+ */
+export async function readFileList(files: Iterable<File>, onSkip?: (path: string) => void): Promise<ImportedFile[]> {
   const out: ImportedFile[] = [];
   for (const f of files) {
     const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
     const path = normalize(rel);
     if (!shouldImport(path)) continue;
-    if (path.toLowerCase().endsWith('.zip')) {
-      out.push(...readZip(new Uint8Array(await f.arrayBuffer()), f.lastModified));
-      continue;
+    try {
+      if (path.toLowerCase().endsWith('.zip')) {
+        out.push(...readZip(new Uint8Array(await f.arrayBuffer()), f.lastModified));
+        continue;
+      }
+      if (isNotePath(path)) out.push({ path, content: (await f.text()).replace(/^\ufeff/, ''), mtime: f.lastModified });
+      else if (f.size <= MAX_ATTACHMENT_BYTES) out.push({ path, bytes: new Uint8Array(await f.arrayBuffer()), mtime: f.lastModified });
+    } catch {
+      onSkip?.(path);
     }
-    if (isNotePath(path)) out.push({ path, content: (await f.text()).replace(/^\ufeff/, ''), mtime: f.lastModified });
-    else if (f.size <= MAX_ATTACHMENT_BYTES) out.push({ path, bytes: new Uint8Array(await f.arrayBuffer()), mtime: f.lastModified });
   }
   return stripCommonRoot(out);
 }

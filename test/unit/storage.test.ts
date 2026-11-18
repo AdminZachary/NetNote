@@ -3,7 +3,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { Library } from '../../src/app/library';
 import { IdbStore, MemoryStore, type VaultStore } from '../../src/storage/store';
-import { readZip, shouldImport, stripCommonRoot, writeZip } from '../../src/storage/transfer';
+import { readFileList, readZip, shouldImport, stripCommonRoot, writeZip } from '../../src/storage/transfer';
 
 const stores: [string, () => Promise<VaultStore>][] = [
   ['MemoryStore', () => Promise.resolve(new MemoryStore())],
@@ -32,6 +32,22 @@ describe.each(stores)('%s', (_name, make) => {
 });
 
 describe('transfer', () => {
+  it('skips a file the browser cannot read and keeps the rest', async () => {
+    const file = (rel: string, text: string | null) =>
+      ({
+        name: rel.split('/').pop()!,
+        webkitRelativePath: rel,
+        lastModified: 1,
+        size: 4,
+        text: () => (text === null ? Promise.reject(new Error('NotReadableError')) : Promise.resolve(text)),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
+      }) as unknown as File;
+    const skipped: string[] = [];
+    const out = await readFileList([file('V/a.md', '# a'), file('V/cloud.md', null), file('V/b/c.md', '# c')], (p) => skipped.push(p));
+    expect(out.map((f) => f.path)).toEqual(['a.md', 'b/c.md']);
+    expect(skipped).toEqual(['V/cloud.md']);
+  });
+
   it('round-trips a vault through a zip, dropping Obsidian internals and the shared root folder', () => {
     const zip = writeZip([
       { path: 'Vault/a.md', content: '# A [[b]]', mtime: 1 },
