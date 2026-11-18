@@ -19,13 +19,41 @@ import {
   PlaneGeometry,
   RingGeometry,
   SphereGeometry,
+  CanvasTexture,
+  SRGBColorSpace,
 } from '@iwsdk/core';
+import { t as tr } from '../../app/i18n';
+import { FONT } from '../theme';
 import type { Gesture } from './hint';
 
 const GHOST = new Color('#9fe9ff');
 const ACCENT = new Color('#5ee7ff');
 const GOLD = new Color('#ffd166');
 const ORANGE = new Color('#ffb86b');
+
+/** A small text tag on a plane (seen from its front only, so a turned hand hides the far side's tag). */
+function tag(text: string, color: string, w = 0.034, h = 0.012): Mesh<PlaneGeometry, MeshBasicMaterial> {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = Math.round((256 * h) / w);
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = 'rgba(6,11,24,0.72)';
+  const r = c.height / 2;
+  ctx.beginPath();
+  ctx.roundRect(2, 2, c.width - 4, c.height - 4, r);
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 4;
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.font = `700 ${Math.round(c.height * 0.58)}px ${FONT}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, c.width / 2, c.height / 2 + 1);
+  const tex = new CanvasTexture(c);
+  tex.colorSpace = SRGBColorSpace;
+  return new Mesh(new PlaneGeometry(w, h), new MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+}
 
 const ease = (t: number): number => (t <= 0 ? 0 : t >= 1 ? 1 : t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 const clamp01 = (t: number): number => Math.max(0, Math.min(1, t));
@@ -71,9 +99,17 @@ class GhostHand {
     palm.scale.set(0.075, 0.08, 0.024);
     body.add(palm);
     // which side is the palm: a soft disc on it, so a turning hand reads
-    this.palmMark = new Mesh(new CircleGeometry(0.022, 24), ghost(ACCENT, 0.5));
+    this.palmMark = new Mesh(new CircleGeometry(0.022, 24), ghost(GOLD, 0.55));
     this.palmMark.position.set(0, -0.005, 0.0125);
     body.add(this.palmMark);
+    // say which side you are looking at: "Palm" on the palm, "Back" on the back of the hand
+    const palmTag = tag(tr().demoPalm, '#ffd166', 0.052, 0.018);
+    palmTag.position.set(0, -0.028, 0.016);
+    body.add(palmTag);
+    const backTag = tag(tr().demoBack, '#cfefff', 0.052, 0.018);
+    backTag.position.set(0, -0.028, -0.016);
+    backTag.rotation.y = Math.PI;
+    body.add(backTag);
     const xs = [-0.027, -0.009, 0.009, 0.026];
     const lens = [0.03, 0.034, 0.032, 0.025];
     xs.forEach((x, i) => {
@@ -113,6 +149,21 @@ class GhostHand {
     void s;
   }
 
+  /** 0: open hand, 1: pointing (index straight, the other fingers and thumb tucked in). */
+  point(k: number): void {
+    const idx = this.fingers[0]!;
+    idx.base.rotation.x = 0;
+    idx.tip.rotation.x = 0;
+    for (let i = 1; i < 4; i++) {
+      this.fingers[i]!.base.rotation.x = 1.5 * k;
+      this.fingers[i]!.tip.rotation.x = 1.6 * k;
+    }
+    this.thumb.base.rotation.z = (0.75 - 0.7 * k) * this.side;
+    this.thumb.base.rotation.x = 0.9 * k;
+    this.thumb.tip.rotation.x = 0.6 * k;
+    this.pinchDot.visible = false;
+  }
+
   /** 0: open hand, 1: thumb and index tips together (a pinch). */
   pinch(p: number): void {
     const s = this.side;
@@ -129,6 +180,94 @@ class GhostHand {
     this.thumb.tip.rotation.x = 0.35 * p;
     this.pinchDot.visible = p > 0.85;
     this.pinchDot.position.set(-0.03 * s, 0.062, 0.032);
+  }
+}
+
+/** The menu bar in miniature, the panel that Insights opens, and the link it suggests. */
+class InsightsScene {
+  readonly root = new Group();
+  readonly icons: Mesh<CircleGeometry, MeshBasicMaterial>[] = [];
+  readonly ring: Mesh<RingGeometry, MeshBasicMaterial>;
+  readonly ripple: Mesh<RingGeometry, MeshBasicMaterial>;
+  readonly bar: Mesh<PlaneGeometry, MeshBasicMaterial>;
+  readonly panel = new Group();
+  readonly panelBg: Mesh<PlaneGeometry, MeshBasicMaterial>;
+  readonly rows: Mesh<PlaneGeometry, MeshBasicMaterial>[] = [];
+  readonly a = new Star(ACCENT, 0.008);
+  readonly b = new Star(ORANGE, 0.008);
+  /** a thick gold stroke (a plane stretched between the two stars) */
+  readonly link = new Mesh(new PlaneGeometry(1, 0.0045), ghost(GOLD, 0.95));
+  readonly spark: Mesh<SphereGeometry, MeshBasicMaterial>;
+  /** where the Insights button sits (x of its icon on the bar) */
+  static readonly X = 0.034;
+  static readonly AX = -0.135;
+  static readonly AY = 0.01;
+  static readonly BX = -0.075;
+  static readonly BY = 0.055;
+  constructor() {
+    this.bar = new Mesh(new PlaneGeometry(0.17, 0.026), ghost(ACCENT, 0.22));
+    this.root.add(this.bar);
+    for (let i = 0; i < 5; i++) {
+      const insight = i === 3;
+      const m = new Mesh(new CircleGeometry(0.0065, 18), ghost(insight ? GOLD : GHOST, insight ? 0.9 : 0.45));
+      m.position.set(-0.068 + i * 0.034, 0, 0.001);
+      this.icons.push(m);
+      this.root.add(m);
+    }
+    this.ring = new Mesh(new RingGeometry(0.009, 0.0115, 28), ghost(GOLD, 0.9));
+    this.ring.position.set(InsightsScene.X, 0, 0.002);
+    this.ripple = new Mesh(new RingGeometry(0.01, 0.012, 32), ghost(GOLD, 0));
+    this.ripple.position.copy(this.ring.position);
+    this.root.add(this.ring, this.ripple);
+    // the panel rises out of the bar: a gold title row and three suggestions
+    this.panelBg = new Mesh(new PlaneGeometry(0.1, 0.07), ghost(ACCENT, 0.2));
+    this.panel.add(this.panelBg);
+    const header = tag(tr().menuOverview, '#ffd166', 0.05, 0.014);
+    header.position.set(-0.018, 0.024, 0.002);
+    this.panel.add(header);
+    for (let i = 0; i < 3; i++) {
+      const r = new Mesh(new PlaneGeometry(0.084, 0.011), ghost(i === 0 ? GOLD : GHOST, 0.35));
+      r.position.set(0, 0.006 - i * 0.016, 0.001);
+      this.rows.push(r);
+      this.panel.add(r);
+    }
+    this.panel.position.set(InsightsScene.X, 0.06, 0);
+    this.root.add(this.panel);
+    // the link it found, between two stars that were never joined
+    this.a.root.position.set(InsightsScene.AX, InsightsScene.AY, 0);
+    this.b.root.position.set(InsightsScene.BX, InsightsScene.BY, 0);
+    this.spark = new Mesh(new SphereGeometry(0.005, 10, 8), ghost(GOLD, 0.95));
+    this.root.add(this.a.root, this.b.root, this.link, this.spark);
+  }
+
+  /** ph: 0..1 through one loop; press: 0..1 the fingertip on the button */
+  update(ph: number, press: number, t: number): void {
+    const open = ease(seg(ph, 0.36, 0.5)) * (1 - ease(seg(ph, 0.9, 1)));
+    this.ring.material.opacity = 0.5 + 0.4 * Math.sin(t * 6) ** 2 * (1 - open) + 0.5 * press;
+    this.ring.scale.setScalar(1 + 0.25 * press);
+    const rp = seg(ph, 0.3, 0.55);
+    this.ripple.material.opacity = rp > 0 && rp < 1 ? 0.9 * (1 - rp) : 0;
+    this.ripple.scale.setScalar(1 + 3.5 * rp);
+    this.icons[3]!.scale.setScalar(1 + 0.35 * press);
+    this.panel.visible = open > 0.01;
+    this.panel.scale.set(1, Math.max(0.01, open), 1);
+    this.panel.position.y = 0.022 + 0.04 * open;
+    this.panelBg.material.opacity = 0.22 * open;
+    // the top suggestion glows, then its link is drawn between the two stars
+    const row = seg(ph, 0.5, 0.58);
+    this.rows[0]!.material.opacity = 0.35 + 0.5 * row * (0.6 + 0.4 * Math.sin(t * 8) ** 2);
+    const draw = ease(seg(ph, 0.58, 0.8)) * (1 - ease(seg(ph, 0.9, 1)));
+    const show = ph > 0.5 && ph < 0.98;
+    this.a.root.visible = this.b.root.visible = show;
+    this.a.light(row);
+    this.b.light(draw > 0.98 ? 1 : 0);
+    const { AX: ax, AY: ay, BX: bx, BY: by } = InsightsScene;
+    this.link.visible = this.spark.visible = draw > 0.01;
+    const len = Math.hypot(bx - ax, by - ay) * draw;
+    this.link.scale.set(Math.max(1e-4, len), 1, 1);
+    this.link.rotation.z = Math.atan2(by - ay, bx - ax);
+    this.link.position.set(ax + ((bx - ax) * draw) / 2, ay + ((by - ay) * draw) / 2, 0.001);
+    this.spark.position.set(ax + (bx - ax) * draw, ay + (by - ay) * draw, 0.002);
   }
 }
 
@@ -203,6 +342,7 @@ export class GestureDemo {
   private readonly wall: Mesh<PlaneGeometry, MeshBasicMaterial>;
   private readonly arrow: Mesh<RingGeometry, MeshBasicMaterial>;
   private readonly bar: Mesh<PlaneGeometry, MeshBasicMaterial>;
+  private readonly insights = new InsightsScene();
   private gesture: Gesture = 'none';
   private time = 0;
   private arrowK = 0;
@@ -233,6 +373,7 @@ export class GestureDemo {
       this.wall,
       this.arrow,
       this.bar,
+      this.insights.root,
     );
     this.root.traverse((o) => {
       o.raycast = () => undefined; // never in the way of a pinch
@@ -255,15 +396,46 @@ export class GestureDemo {
     const R = this.right;
     const L = this.left;
     // everything off, then each gesture switches on what it needs
-    for (const o of [R.root, L.root, this.starA.root, this.starB.root, this.card, this.link, this.band, this.map, this.wall, this.arrow, this.bar])
+    for (const o of [
+      R.root,
+      L.root,
+      this.starA.root,
+      this.starB.root,
+      this.card,
+      this.link,
+      this.band,
+      this.map,
+      this.wall,
+      this.arrow,
+      this.bar,
+      this.insights.root,
+    ])
       o.visible = false;
     R.root.rotation.set(0, 0, 0);
     L.root.rotation.set(0, 0, 0);
+    R.root.scale.setScalar(1);
     this.map.scale.setScalar(1);
     this.map.rotation.set(0, 0, 0);
     switch (this.gesture) {
-      case 'pinch':
       case 'tap': {
+        // the fingertip goes to the Insights button on the menu bar and presses it: the panel opens and
+        // the link it found draws itself between two stars
+        const period = 4.0;
+        const ph = (t % period) / period;
+        const reach = ease(seg(ph, 0.05, 0.28)) * (1 - ease(seg(ph, 0.62, 0.8)));
+        const press = ph > 0.28 && ph < 0.4 ? Math.sin(((ph - 0.28) / 0.12) * Math.PI) : 0;
+        R.root.visible = this.insights.root.visible = true;
+        R.root.scale.setScalar(0.8);
+        R.point(ease(seg(ph, 0, 0.12)) * (1 - ease(seg(ph, 0.85, 1))));
+        // fingertip ≈ 0.076 m above the hand's root at this scale, index a little to the thumb side
+        const tipX = InsightsScene.X + 0.02;
+        R.root.position.set(tipX + 0.05 * (1 - reach), 0.03 - 0.082 - 0.03 * (1 - reach), 0.03 + 0.03 * (1 - reach) - 0.012 * press);
+        R.root.rotation.set(-0.15, 0.2, 0);
+        this.insights.root.position.set(0, 0.025, 0);
+        this.insights.update(ph, press, t);
+        break;
+      }
+      case 'pinch': {
         // point at a star and pinch: it lights up and its card opens
         const p = cycle(t, 2.4);
         R.root.visible = this.starA.root.visible = this.card.visible = this.band.visible = true;

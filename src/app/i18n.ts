@@ -191,6 +191,8 @@ const en = {
   tipTwoHands: 'Pinch with both hands and pull apart to zoom',
   tipMapHold: 'With the map up, pinch it with both hands: pull apart to zoom, turn to rotate your whole library',
   tipConnect: 'Pinch a star and drag it onto another to connect them',
+  demoPalm: 'Palm',
+  demoBack: 'Back',
   tipMenu: 'The menu floats just below your view. Turn your left palm towards you and give a quick pinch with that hand to hide or show it',
   // insight phrasing
   sharedLinks: (names: string[]) => `both link to ${names.map((n) => `“${n}”`).join(', ')}`,
@@ -494,6 +496,8 @@ const zh: Dict = {
   tipTwoHands: '双手同时捏住再拉开，可以缩放',
   tipMapHold: '调出地图后，用双手捏住它：拉开就放大，转动就旋转整个资料库',
   tipConnect: '捏住一颗星拖到另一颗上，就能把它们连起来',
+  demoPalm: '手掌',
+  demoBack: '手背',
   tipMenu: '菜单在视线下方；左手掌心朝向自己，用左手快速捏一下，就能收起或显示',
   sharedLinks: (names) => `都链接了${names.map((n) => `「${n}」`).join('')}`,
   sharedTerms: (terms) => `都谈到${terms.map((t) => `「${t}」`).join('')}`,
