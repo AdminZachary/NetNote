@@ -44,23 +44,36 @@ function ghost(color = GHOST, opacity = 0.55): MeshBasicMaterial {
   return new MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, blending: AdditiveBlending });
 }
 
-/** A stylised hand: palm, four fingers in two segments, a thumb. Local units: metres, fingers up (+y), palm facing +z. */
+/**
+ * A stylised hand: palm, four fingers in two segments, a thumb. Local units: metres, fingers up (+y).
+ * At rest the back of the hand faces you (+z), as your own hand does when you pinch; turn it by π about y
+ * and the palm, with its accent disc, faces you. The thumb sits on the anatomically right side either way.
+ */
 class GhostHand {
   readonly root = new Group();
   private readonly fingers: { base: Group; tip: Group }[] = [];
   private readonly thumb: { base: Group; tip: Group };
   private readonly pinchDot: Mesh;
   private readonly palmMark: Mesh;
+  private readonly side: number;
 
-  constructor(mirror = false) {
+  /** `left`: a left hand (thumb on the right when you see its back). */
+  constructor(left = false) {
+    // the parts are built palm towards +z, then the body is turned to show its back; that turn mirrors x,
+    // so the parts are laid out for the other hand
+    const mirror = !left;
+    this.side = mirror ? -1 : 1;
+    const body = new Group();
+    body.rotation.y = Math.PI;
+    this.root.add(body);
     const mat = ghost();
     const palm = new Mesh(new SphereGeometry(0.5, 20, 14), mat);
     palm.scale.set(0.075, 0.08, 0.024);
-    this.root.add(palm);
+    body.add(palm);
     // which side is the palm: a soft disc on it, so a turning hand reads
     this.palmMark = new Mesh(new CircleGeometry(0.022, 24), ghost(ACCENT, 0.5));
     this.palmMark.position.set(0, -0.005, 0.0125);
-    this.root.add(this.palmMark);
+    body.add(this.palmMark);
     const xs = [-0.027, -0.009, 0.009, 0.026];
     const lens = [0.03, 0.034, 0.032, 0.025];
     xs.forEach((x, i) => {
@@ -76,7 +89,7 @@ class GhostHand {
       b.position.y = (len * 0.85) / 2;
       tip.add(b);
       base.add(tip);
-      this.root.add(base);
+      body.add(base);
       this.fingers.push({ base, tip });
     });
     const s = mirror ? -1 : 1;
@@ -92,17 +105,17 @@ class GhostHand {
     tm.position.y = 0.011;
     tt.add(tm);
     tb.add(tt);
-    this.root.add(tb);
+    body.add(tb);
     this.thumb = { base: tb, tip: tt };
     this.pinchDot = new Mesh(new SphereGeometry(0.009, 12, 8), ghost(ACCENT, 0.95));
     this.pinchDot.visible = false;
-    this.root.add(this.pinchDot);
+    body.add(this.pinchDot);
     void s;
   }
 
   /** 0: open hand, 1: thumb and index tips together (a pinch). */
-  pinch(p: number, mirror = false): void {
-    const s = mirror ? -1 : 1;
+  pinch(p: number): void {
+    const s = this.side;
     const idx = this.fingers[0]!;
     // index curls forward, the others curl a little less; the thumb swings in to meet the index
     idx.base.rotation.x = 0.95 * p;
@@ -293,8 +306,8 @@ export class GestureDemo {
         const turn = cycle(t, 3.0);
         L.root.visible = true;
         L.root.position.set(0, -0.05, 0.03);
-        L.root.rotation.y = Math.PI * (1 - turn);
-        L.pinch(0, true);
+        L.root.rotation.y = Math.PI * turn;
+        L.pinch(0);
         this.map.visible = turn > 0.7;
         this.map.position.set(0, 0.07, 0.03);
         this.map.scale.setScalar(ease(seg(turn, 0.7, 1)));
@@ -313,7 +326,7 @@ export class GestureDemo {
         R.root.position.set(spread + 0.02, -0.03, 0.05);
         L.root.rotation.set(-0.2, -0.5, 0);
         R.root.rotation.set(-0.2, 0.5, 0);
-        L.pinch(grab, true);
+        L.pinch(grab);
         R.pinch(grab);
         this.map.position.set(0, 0.03, 0.02);
         this.map.scale.setScalar(0.9 + 0.6 * k);
@@ -344,8 +357,8 @@ export class GestureDemo {
         L.root.visible = this.bar.visible = true;
         R.root.visible = false;
         L.root.position.set(0, -0.04, 0.04);
-        L.root.rotation.y = Math.PI * (1 - turn);
-        L.pinch(p, true);
+        L.root.rotation.y = Math.PI * turn;
+        L.pinch(p);
         this.bar.position.set(0, 0.07, 0);
         this.bar.material.opacity = ph > 0.55 && ph < 0.95 ? 0.45 * Math.min(1, (ph - 0.55) / 0.08) : 0;
         break;

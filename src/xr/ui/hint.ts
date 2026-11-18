@@ -181,7 +181,9 @@ function ray(ctx: Ctx, x0: number, y0: number, x1: number, y1: number): void {
 function hand(ctx: Ctx, cx: number, cy: number, s: number, pinch: number, turn = 0, mirror = false): { tip: [number, number] } {
   ctx.save();
   ctx.translate(cx, cy);
-  const sx = (mirror ? -1 : 1) * (1 - 0.55 * Math.sin(turn * Math.PI) * 0.6);
+  // turning the palm towards you flips the hand over (the thumb changes side), as a real hand does
+  const c = Math.cos(turn * Math.PI);
+  const sx = (mirror ? -1 : 1) * Math.sign(c || 1) * Math.max(0.18, Math.abs(c));
   ctx.scale(sx * s, s);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
